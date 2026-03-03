@@ -46,14 +46,18 @@ def main():
     detect_tiff_dims(fp, cfg, args.config)
 
     zr = cfg['prescan_z_step'] / cfg['prescan_pixel_size_xy']
-    g, d = load_volume(
-        fp,
-        tuple(cfg['raw_dims']),
-        cfg['raw_dtype'],
-        cfg['binning'],
-        z_ratio=zr,
-        header_bytes=cfg.get('raw_header_bytes', 0)
-    )
+    try:
+        g, d = load_volume(
+            fp,
+            tuple(cfg['raw_dims']),
+            cfg['raw_dtype'],
+            cfg['binning'],
+            z_ratio=zr,
+            header_bytes=cfg.get('raw_header_bytes', 0)
+        )
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning("%s", e)
+        g, d = None, None
 
     c = calculate_contrast_limits(d)
     w = CylinderApp(cfg, g, d, c)

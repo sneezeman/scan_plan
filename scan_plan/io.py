@@ -40,14 +40,15 @@ def parse_nml(file_path):
 
 def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0):
     if not os.path.exists(filepath):
-        print(f"Error: File not found -> {filepath}")
-        return None, None
+        raise FileNotFoundError(f"Volume file not found: {filepath}")
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext not in ['.tif', '.tiff', '.raw', '.vol']:
+        raise ValueError(f"Unsupported volume format: '{ext}'. Use .tif, .tiff, .raw, or .vol")
     try:
-        ext = os.path.splitext(filepath)[1].lower()
         if ext in ['.tif', '.tiff']:
             with tifffile.TiffFile(filepath) as tif:
                 data = tif.asarray()
-        elif ext in ['.raw', '.vol']:
+        else:
             dtype = np.dtype(dtype_str)
             x, y, z = dims
             expected_elements = x * y * z
@@ -55,8 +56,6 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
                 if header_bytes > 0: f.seek(header_bytes)
                 data = np.fromfile(f, dtype=dtype, count=expected_elements)
             data = data.reshape((z, y, x))
-        else:
-            return None, None
 
         data = np.squeeze(data)
         if data.ndim > 3:
@@ -89,7 +88,7 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         return grid, data
 
     except Exception as e:
-        print(f"\n--- FAILED TO LOAD VOLUME ---\nException: {e}\n")
+        logger.error("Failed to load volume: %s", e, exc_info=True)
         return None, None
 
 
@@ -107,7 +106,7 @@ def load_config(filepath):
     }
 
     if not os.path.exists(filepath):
-        logger.debug(f"Config file not found. Creating default: {filepath}")
+        logger.info("Config file not found. Creating default: %s", filepath)
         with open(filepath, 'w') as f:
             json.dump(default_config, f, indent=4)
         return default_config
@@ -116,7 +115,7 @@ def load_config(filepath):
         try:
             return json.load(f)
         except Exception as e:
-            print(f"Failed to parse config JSON: {e}")
+            logger.error("Failed to parse config JSON: %s", e)
             return default_config
 
 

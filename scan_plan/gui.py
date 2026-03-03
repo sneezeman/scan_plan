@@ -255,13 +255,19 @@ class RegistrationDialog(QtWidgets.QDialog):
                 self.table_matrix.setItem(i, j, item)
 
     def calculate_registration(self):
+        # Validate numeric fields before doing work
+        for name, field in [("su", self.in_su), ("sv", self.in_sv), ("sz", self.in_sz), ("Pixel Size", self.in_px)]:
+            try:
+                float(field.text())
+            except ValueError:
+                QtWidgets.QMessageBox.warning(self, "Input Error", f"'{name}' must be a valid number.")
+                return
         try:
             pre_px = self.main_app.cfg["prescan_pixel_size_xy"]
             su = float(self.in_su.text())
             sv = float(self.in_sv.text())
             sz = float(self.in_sz.text())
-            try: self.ref_px = float(self.in_px.text())
-            except ValueError: self.ref_px = 180.0
+            self.ref_px = float(self.in_px.text())
 
             pre_pts, self.ref_pts = self.get_points()
             if len(pre_pts) < 3:
@@ -800,7 +806,10 @@ class CylinderApp(QtWidgets.QMainWindow):
                 self.rois.append({'x':p[0],'y':p[1],'z':p[2],'w':p[3],'h':p[4],'d':p[5]})
                 self.refresh_roi_list()
                 self.recalculate_points()
-        except Exception: pass
+            else:
+                self.statusBar().showMessage("ROI format: x,y,z,w,h,d (6 integers)", 5000)
+        except (ValueError, AttributeError):
+            self.statusBar().showMessage("Bad ROI format. Expected: x,y,z,w,h,d", 5000)
 
     def delete_selected_rois(self):
         for i in sorted([item.row() for item in self.roi_list_widget.selectedIndexes()], reverse=True):
