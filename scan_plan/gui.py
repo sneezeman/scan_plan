@@ -519,7 +519,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         h_vol.addWidget(QtWidgets.QLabel("Max:"))
         self.txt_vol_max = QtWidgets.QLineEdit("1.0")
         self.txt_vol_max.setFixedWidth(40)
-        self.txt_vol_max.textChanged.connect(self.update_opacity)
+        self.txt_vol_max.editingFinished.connect(self.update_opacity)
         h_vol.addWidget(self.txt_vol_max)
         lo.addLayout(h_vol)
 
@@ -881,6 +881,11 @@ class CylinderApp(QtWidgets.QMainWindow):
             act = self.plotter.add_mesh(cube, style='wireframe', color='cyan', line_width=2)
             self.roi_actors.append(act)
 
+        # Collect all label points and sequential IDs
+        label_points = []
+        label_ids = []
+        seq = 0
+
         idx_auto = np.where(self.active_mask)[0]
         if len(idx_auto) > 0:
             vp = self.all_points[idx_auto].copy()
@@ -894,6 +899,11 @@ class CylinderApp(QtWidgets.QMainWindow):
             c2 = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=d_exp/2, height=vis_H_exp)
             self.actor_exp = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c2, scale=False), color='magenta', opacity=self.slider_cyl.value()/100)
 
+            for pt in vp:
+                label_points.append(pt)
+                label_ids.append(str(seq))
+                seq += 1
+
         if self.chk_show_manual.isChecked() and len(self.manual_points) > 0:
             man_active = [p for p, a in zip(self.manual_points, self.active_manual_mask) if a]
             if len(man_active) > 0:
@@ -903,6 +913,20 @@ class CylinderApp(QtWidgets.QMainWindow):
 
                 c_man = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_std[0]/2, height=vis_H_std)
                 self.actor_man = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man, scale=False), color='yellow', opacity=self.slider_cyl.value()/100)
+
+                for pt in mp:
+                    label_points.append(pt)
+                    label_ids.append(f"M{seq}")
+                    seq += 1
+
+        if label_points:
+            label_poly = pv.PolyData(np.array(label_points))
+            label_poly["labels"] = label_ids
+            self.actor_labels = self.plotter.add_point_labels(
+                label_poly, "labels", font_size=12, text_color="white",
+                shadow=True, point_size=1, render_points_as_spheres=False,
+                always_visible=True, shape_opacity=0.4
+            )
 
         self.update_visibility()
         self.update_opacity()
