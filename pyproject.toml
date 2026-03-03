@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scan_plan"
+version = "1.0.0"
+description = "Advanced GUI for Cylinder Packing Strategy in high-resolution tomography."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "tifffile",
+    "pyvista",
+    "pyvistaqt",
+    "pandas",
+    "scipy",
+    "PyQt5",
+    "pint"
+]
+
+[project.scripts]
+scan-plan = "scan_plan.scan_plan:main"

@@ -1,0 +1,27 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Volume Data (CRITICAL)
+*.tif
+*.tiff
+*.raw
+*.vol
+
+# Auto-generated configs and outputs
+scan_plan_config.json
+*_motor_coords.txt
+*_webknossos.txt
+*_match_pairs.txt
+*.nml
+
+# Virtual environments
+venv/
+env/
+.venv/
+*.egg-info/
