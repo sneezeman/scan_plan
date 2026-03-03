@@ -14,6 +14,7 @@ import os
 import math
 import argparse
 import json
+import logging
 import warnings
 import xml.etree.ElementTree as ET
 import numpy as np
@@ -27,23 +28,10 @@ from pyvistaqt import QtInteractor
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pyvista")
 
-# Import Modules: Handles both `pip installed` module and local script execution
-try:
-    from scan_plan.volume_registration import VolumeRegistration
-    from scan_plan.nml_exporter import generate_nml
-except ImportError:
-    try:
-        from volume_registration import VolumeRegistration
-        from nml_exporter import generate_nml
-    except ImportError as e:
-        print(f"Error: Missing dependency module -> {e}")
-        sys.exit(1)
+from scan_plan.volume_registration import VolumeRegistration
+from scan_plan.nml_exporter import generate_nml
 
-DEBUG_MODE = False
-
-def _debug(msg):
-    if DEBUG_MODE:
-        print(f"[DEBUG] {msg}")
+logger = logging.getLogger(__name__)
 
 # ==============================
 # 1. DATA & MATH HELPERS
@@ -1158,7 +1146,7 @@ def load_config(filepath):
     }
     
     if not os.path.exists(filepath):
-        _debug(f"Config file not found. Creating default: {filepath}")
+        logger.debug(f"Config file not found. Creating default: {filepath}")
         with open(filepath, 'w') as f:
             json.dump(default_config, f, indent=4)
         return default_config
@@ -1179,8 +1167,10 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable verbose memory shape logging.")
     args = parser.parse_args()
     
-    global DEBUG_MODE
-    DEBUG_MODE = args.debug
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.WARNING,
+        format='[%(levelname)s] %(message)s'
+    )
     
     app = QtWidgets.QApplication(sys.argv)
     cfg = load_config(args.config)
@@ -1214,7 +1204,7 @@ def main():
                     with open(args.config, 'w') as f:
                         json.dump(cfg, f, indent=4)
         except Exception as e:
-            _debug(f"TIFF shape parse fallback used: {e}")
+            logger.debug(f"TIFF shape parse fallback used: {e}")
 
     zr = cfg['prescan_z_step'] / cfg['prescan_pixel_size_xy']
     g, d = load_volume(
