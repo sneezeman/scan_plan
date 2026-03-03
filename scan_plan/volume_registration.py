@@ -33,16 +33,19 @@ class RegistrationResult(typing.NamedTuple):
 
 class VolumeRegistration():
     
-    def __init__(self, prescan_pixelsize, prescan_pixelunits='nm', flipped=False, pitch=-0.015396):
+    def __init__(self, prescan_pixelsize, prescan_pixelunits='nm', flipped=False, pitch=-0.015396, optics=None):
+        if optics is None:
+            optics = {}
         self.__prescan_pixelsize = prescan_pixelsize
         self.__prescan_pixelunits = prescan_pixelunits
         self.__ref_volumes = []
         self.__datapoints = []
         self.__transformationMatrix = None
-        self.__beam_pitch = pitch
-        self.__optics_pixel_size = 2.952
-        self.__z12 = 1281
-        self.__sx0 = 1.28
+        self.__beam_pitch = optics.get('beam_pitch_rad', pitch)
+        self.__optics_pixel_size = optics.get('optics_pixel_size_um', 2.952)
+        self.__z12 = optics.get('z12', 1281)
+        self.__sx0 = optics.get('sx0_mm', 1.28)
+        self._rotation_offset = optics.get('rotation_offset_deg', -21.5)
         self._prescan_offset_scaled = np.array([0,0,0])
         self._refscan_offset = np.array([0,0,0])
         
@@ -51,14 +54,14 @@ class VolumeRegistration():
         self.__ref_volumes += [ ReferenceVolume(su, sv, sz, pixel_size, pixel_unit, width, height) ]
         return idx
     
-    def _suv2saxy(self, su, sv, offset=-21.5):
-        th = -offset*np.pi/180.
+    def _suv2saxy(self, su, sv):
+        th = -self._rotation_offset*np.pi/180.
         sax = -su*np.sin(th) + sv*np.cos(th)
         say =  su*np.cos(th) + sv*np.sin(th)
         return sax, say
-    
-    def _saxy2suv(self, sax, say, offset=-21.5):
-        th = -offset*np.pi/180.
+
+    def _saxy2suv(self, sax, say):
+        th = -self._rotation_offset*np.pi/180.
         su = say*np.cos(th) - sax*np.sin(th)
         sv = say*np.sin(th) + sax*np.cos(th)
         return su, sv

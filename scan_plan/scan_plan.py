@@ -287,8 +287,9 @@ class RegistrationDialog(QtWidgets.QDialog):
                 return
                 
             # Initialize Both Models
-            self.vreg_svd = VolumeRegistration(pre_px)
-            self.vreg_opt = VolumeRegistration(pre_px)
+            optics = self.main_app.cfg.get('optics', {})
+            self.vreg_svd = VolumeRegistration(pre_px, optics=optics)
+            self.vreg_opt = VolumeRegistration(pre_px, optics=optics)
             self.vreg_svd.addReferenceVolume(su, sv, sz, self.ref_px)
             self.vreg_opt.addReferenceVolume(su, sv, sz, self.ref_px)
             
