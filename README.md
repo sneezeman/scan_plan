@@ -1,34 +1,10 @@
-# scan_plan
+<img width="300" height="150" alt="Gemini_Generated_Image_upewhiupewhiupew" src="https://github.com/user-attachments/assets/99eb6095-e09c-4395-9b50-4071c6e2aedb" />
 
-Advanced GUI for Cylinder Packing Strategy in high-resolution synchrotron tomography.
+GUI for scanning strategy in high-resolution tomography.
 
 Plan cylindrical scan regions within a 3D prescan volume, pack them efficiently using bounding-box ROIs, and register coordinates between prescan and machine reference frames using dual SVD/Optimizer transformation models.
 
-## Features
-
-- 3D volume rendering with adjustable blending modes (Composite, MIP, MinIP, Average)
-- Automatic cylinder grid generation with three fill modes: Strict, Center, Coverage
-- Manual cylinder placement with bulk paste support
-- ROI management from WebKnossos NML files or manual entry
-- Dual coordinate registration (SVD Kabsch + SciPy Optimizer) with per-point error analysis
-- Motor coordinate registration mode — match prescan pixels directly against su/sv/sz motor positions without a refscan
-- NML export for standard and expanded bounding boxes
-- Machine coordinate export with motor positions, Fiji-compatible coordinates, and WebKnossos NML bounding boxes
-- Match point file loading — reload previously saved `_match_pairs.txt` files into the registration dialog
-
 ## Installation
-
-```bash
-pip install -e .
-```
-
-For development with tests:
-
-```bash
-pip install -e ".[test]"
-```
-
-### Environment
 
 Requires Python >= 3.10 and scipy >= 1.13 (for `scipy.spatial.transform.RigidTransform`).
 
@@ -50,8 +26,8 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 
 1. Upload prescan volume to WebKnossos
 2. Draw bounding boxes around regions of interest
-3. Export the annotation as an NML file (Download → NML)
-4. Load the NML into scan-plan via the **Load NML** button
+3. Export the annotation and load the .nml file into scan-plan via the **Load NML** button
+**OR** Copy-paste the bounding boxes' coordinates from WebKnossos directly to the scan-plan application.
 
 **Fiji / manual path:**
 
@@ -89,37 +65,9 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 5. Review per-point errors in the Results tab
 6. Click **SAVE MACHINE COORDINATES** to export all output files
 
-## CLI Usage
-
-```bash
-scan-plan [CONFIG_PATH] [--debug]
-```
-
-### CLI Arguments
-
-| Argument      | Description                          | Default                    |
-|---------------|--------------------------------------|----------------------------|
-| `CONFIG_PATH` | Path to JSON configuration file      | `scan_plan_config.json`    |
-| `--debug`     | Enable verbose debug logging         | off                        |
-
-All settings (volume path, binning, ROIs, optics, etc.) are specified in the JSON config file. If the config file does not exist, a default example is auto-generated.
-
-### Examples
-
-```bash
-# Launch with default config (scan_plan_config.json)
-scan-plan
-
-# Use a custom config
-scan-plan my_experiment.json
-
-# Debug mode
-scan-plan my_experiment.json --debug
-```
-
 ## Configuration
 
-The JSON config file controls volume loading and scan parameters. See `scan_plan_config.example.json` for a full template.
+The JSON config file controls volume loading and scan parameters. See `scan_plan_config.example.json` for a full template. If the config file does not exist, a default example is auto-generated.
 
 ### Core Settings
 
@@ -134,16 +82,6 @@ The JSON config file controls volume loading and scan parameters. See `scan_plan
 | `prescan_z_step`       | number   | Prescan Z step size in nm                |
 | `scan_pixel_size`      | number   | Target scan pixel size in nm             |
 | `rois`                 | array    | Pre-defined ROI bounding boxes           |
-
-### Optics Settings (optional)
-
-| Key                    | Type   | Default    | Description                       |
-|------------------------|--------|------------|-----------------------------------|
-| `beam_pitch_rad`       | float  | -0.015396  | Beam pitch angle in radians       |
-| `optics_pixel_size_um` | float  | 2.952      | Optics pixel size in micrometers  |
-| `z12`                  | int    | 1281       | Optics z12 parameter              |
-| `sx0_mm`               | float  | 1.28       | sx0 offset in mm                  |
-| `rotation_offset_deg`  | float  | -21.5      | Stage rotation offset in degrees  |
 
 ## Motor Coordinate Registration
 
@@ -168,3 +106,14 @@ Additionally, the main window **EXPORT NML (TILES)** button exports two NML file
 pip install -e ".[test]"
 pytest
 ```
+## Features
+
+- 3D volume rendering with adjustable blending modes (Composite, MIP, MinIP, Average)
+- Automatic cylinder grid generation with three fill modes: Strict, Center, Coverage
+- Manual cylinder placement with bulk paste support
+- ROI management from WebKnossos NML files or manual entry
+- Dual coordinate registration (SVD Kabsch + SciPy Optimizer) with per-point error analysis
+- Motor coordinate registration mode — match prescan pixels directly against su/sv/sz motor positions without a refscan
+- NML export for standard and expanded bounding boxes
+- Machine coordinate export with motor positions, Fiji-compatible coordinates, and WebKnossos NML bounding boxes
+- Match point file loading — reload previously saved `_match_pairs.txt` files into the registration dialog
