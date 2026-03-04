@@ -63,6 +63,15 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         gb_pts = QtWidgets.QGroupBox("Matching Points")
         l_pts_main = QtWidgets.QVBoxLayout()
+
+        h_mode = QtWidgets.QHBoxLayout()
+        h_mode.addWidget(QtWidgets.QLabel("Right-table mode:"))
+        self.combo_match_mode = QtWidgets.QComboBox()
+        self.combo_match_mode.addItems(["Refscan Pixels", "Motor Coordinates (su/sv/sz)"])
+        self.combo_match_mode.currentIndexChanged.connect(self._on_match_mode_changed)
+        h_mode.addWidget(self.combo_match_mode)
+        l_pts_main.addLayout(h_mode)
+
         h_tables = QtWidgets.QHBoxLayout()
 
         v_pre = QtWidgets.QVBoxLayout()
@@ -75,7 +84,8 @@ class RegistrationDialog(QtWidgets.QDialog):
         h_tables.addLayout(v_pre)
 
         v_ref = QtWidgets.QVBoxLayout()
-        v_ref.addWidget(QtWidgets.QLabel("<b>REFSCAN</b> (Reference Volume Pixels)"))
+        self.lbl_ref_table = QtWidgets.QLabel("<b>REFSCAN</b> (Reference Volume Pixels)")
+        v_ref.addWidget(self.lbl_ref_table)
         self.table_ref = QtWidgets.QTableWidget(0, 3)
         self.table_ref.setHorizontalHeaderLabels(["X", "Y", "Z"])
         self.table_ref.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
@@ -92,7 +102,10 @@ class RegistrationDialog(QtWidgets.QDialog):
         btn_paste = QtWidgets.QPushButton("Paste Clipboard")
         btn_paste.clicked.connect(self.paste_from_clipboard)
         btn_paste.setStyleSheet("background-color: #f0ad4e; color: white;")
-        h_btn.addWidget(btn_add); h_btn.addWidget(btn_del); h_btn.addWidget(btn_paste)
+        btn_load = QtWidgets.QPushButton("Load File")
+        btn_load.clicked.connect(self.load_match_points_from_file)
+        btn_load.setStyleSheet("background-color: #5cb85c; color: white;")
+        h_btn.addWidget(btn_add); h_btn.addWidget(btn_del); h_btn.addWidget(btn_paste); h_btn.addWidget(btn_load)
         l_pts_main.addLayout(h_btn)
 
         self.chk_z_only = QtWidgets.QCheckBox("Restrict Rotation to Z-Axis only")
@@ -201,6 +214,45 @@ class RegistrationDialog(QtWidgets.QDialog):
                     self.table_ref.setItem(cur, c, QtWidgets.QTableWidgetItem(parts[c+3]))
         self.lbl_result.setText(f"Status: Pasted {len(lines)} rows.")
 
+    def load_match_points_from_file(self):
+        options = QtWidgets.QFileDialog.Options()
+        fileName, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load Match Points", "", "Text Files (*.txt)", options=options)
+        if not fileName:
+            return
+        try:
+            with open(fileName, "r") as f:
+                lines = f.readlines()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", f"Could not read file: {e}")
+            return
+
+        self.table_pre.setRowCount(0)
+        self.table_ref.setRowCount(0)
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.replace('\t', ' ').replace(',', ' ').split()
+            parts = [p.strip() for p in parts if p.strip()]
+            if len(parts) >= 6:
+                self.add_row()
+                cur = self.table_pre.rowCount() - 1
+                for c in range(3):
+                    self.table_pre.setItem(cur, c, QtWidgets.QTableWidgetItem(parts[c]))
+                    self.table_ref.setItem(cur, c, QtWidgets.QTableWidgetItem(parts[c+3]))
+                count += 1
+        self.lbl_result.setText(f"Status: Loaded {count} rows from file.")
+
+    def _on_match_mode_changed(self, index):
+        if index == 1:  # Motor Coordinates
+            self.lbl_ref_table.setText("<b>MOTOR COORDS</b> (su/sv/sz in mm)")
+            self.table_ref.setHorizontalHeaderLabels(["su (mm)", "sv (mm)", "sz (mm)"])
+        else:  # Refscan Pixels
+            self.lbl_ref_table.setText("<b>REFSCAN</b> (Reference Volume Pixels)")
+            self.table_ref.setHorizontalHeaderLabels(["X", "Y", "Z"])
+
     def get_points(self):
         prescan, refscan = [], []
         for r in range(self.table_pre.rowCount()):
@@ -269,12 +321,30 @@ class RegistrationDialog(QtWidgets.QDialog):
             sz = float(self.in_sz.text())
             self.ref_px = float(self.in_px.text())
 
-            pre_pts, self.ref_pts = self.get_points()
+            pre_pts, ref_pts_raw = self.get_points()
             if len(pre_pts) < 3:
                 self.lbl_result.setText("Status: Need at least 3 matching points.")
                 return
 
             optics = self.main_app.cfg.get('optics', {})
+
+            # If motor coordinate mode, convert su/sv/sz → refscan pixels
+            if self.combo_match_mode.currentIndex() == 1:
+                try:
+                    final_px = float(self.in_final_px.text())
+                except ValueError:
+                    final_px = 100.0
+                tmp_vreg = VolumeRegistration(pre_px, optics=optics)
+                tmp_vreg.addReferenceVolume(su, sv, sz, self.ref_px)
+                motor_arr = np.array(ref_pts_raw)
+                refscan_arr = tmp_vreg.motors_to_refscan(
+                    motor_arr[:, 0], motor_arr[:, 1], motor_arr[:, 2],
+                    final_px
+                )
+                self.ref_pts = [tuple(row) for row in refscan_arr]
+            else:
+                self.ref_pts = ref_pts_raw
+
             self.vreg_svd = VolumeRegistration(pre_px, optics=optics)
             self.vreg_opt = VolumeRegistration(pre_px, optics=optics)
             self.vreg_svd.addReferenceVolume(su, sv, sz, self.ref_px)
@@ -366,8 +436,15 @@ class RegistrationDialog(QtWidgets.QDialog):
 
             if fileName:
                 df.to_csv(fileName, sep=" ", index=False, float_format="%.04f")
-                wk_filename = os.path.splitext(fileName)[0] + "_webknossos.txt"
-                pd.DataFrame(pts, columns=["x", "y", "z"]).to_csv(wk_filename, sep=" ", index=False, float_format="%.04f")
+                fiji_filename = os.path.splitext(fileName)[0] + "_fiji.txt"
+                fiji_df = pd.DataFrame(pts, columns=["x", "y", "z"])
+                fiji_df["D_std"] = int(self.main_app.dims_std[0])
+                fiji_df["H_std"] = int(self.main_app.dims_std[1])
+                fiji_df.to_csv(fiji_filename, sep=" ", index=False, float_format="%.04f")
+
+                nml_filename = os.path.splitext(fileName)[0] + "_webknossos.nml"
+                D_std, H_std = self.main_app.dims_std
+                generate_nml(nml_filename, pts, D_std, H_std, color_hex="#00FFFF")
 
                 mp_filename = os.path.splitext(fileName)[0] + "_match_pairs.txt"
                 pre_pts, ref_pts = self.get_points()
@@ -376,7 +453,7 @@ class RegistrationDialog(QtWidgets.QDialog):
                     for p, r in zip(pre_pts, ref_pts):
                         f.write(f"{p[0]} {p[1]} {p[2]} {r[0]} {r[1]} {r[2]}\n")
 
-                QtWidgets.QMessageBox.information(self, "Success", f"Saved 3 files:\n{fileName}\n{wk_filename}\n{mp_filename}")
+                QtWidgets.QMessageBox.information(self, "Success", f"Saved 4 files:\n{fileName}\n{fiji_filename}\n{nml_filename}\n{mp_filename}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save: {e}")
 
@@ -443,13 +520,13 @@ class CylinderApp(QtWidgets.QMainWindow):
         scroll.setWidget(panel)
         layout = QtWidgets.QVBoxLayout(panel)
 
-        layout.addWidget(self._create_config_group())
         layout.addWidget(self._create_appearance_group())
-        layout.addWidget(self._create_orient_group())
-        layout.addWidget(self._create_roi_shift_group())
         layout.addWidget(self._create_roi_group())
-        layout.addWidget(self._create_manual_group())
+        layout.addWidget(self._create_config_group())
+        layout.addWidget(self._make_collapsible("Shift Bounding Boxes", self._create_roi_shift_content()))
         layout.addWidget(self._create_auto_grid_group())
+        layout.addWidget(self._make_collapsible("Manual Cylinders", self._create_manual_content()))
+        layout.addWidget(self._create_orient_group())
         layout.addWidget(self._create_actions_group())
 
         layout.addStretch()
@@ -461,10 +538,48 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.plotter.show_grid()
         main_layout.addWidget(self.plotter)
 
+    def _make_collapsible(self, title, content_widget, collapsed=True):
+        """Return a widget with a togglable header and collapsible content."""
+        container = QtWidgets.QWidget()
+        vbox = QtWidgets.QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(0)
+
+        toggle_btn = QtWidgets.QToolButton()
+        toggle_btn.setStyleSheet("QToolButton { font-weight: bold; border: none; }")
+        toggle_btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        toggle_btn.setText(title)
+        toggle_btn.setArrowType(QtCore.Qt.RightArrow if collapsed else QtCore.Qt.DownArrow)
+        toggle_btn.setCheckable(True)
+        toggle_btn.setChecked(not collapsed)
+
+        content_widget.setVisible(not collapsed)
+
+        def on_toggle(checked):
+            toggle_btn.setArrowType(QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow)
+            content_widget.setVisible(checked)
+
+        toggle_btn.toggled.connect(on_toggle)
+
+        vbox.addWidget(toggle_btn)
+        vbox.addWidget(content_widget)
+        return container
+
     def _create_config_group(self):
-        grp = QtWidgets.QGroupBox("1. Configuration")
+        grp = QtWidgets.QGroupBox("Grid Settings")
         lo = QtWidgets.QVBoxLayout()
         lo.setSpacing(5)
+
+        h = QtWidgets.QHBoxLayout()
+        self.txt_res = QtWidgets.QLineEdit(str(self.current_scan_res))
+        lbl_res = QtWidgets.QLabel("Scan Px (nm):")
+        lbl_res.setStyleSheet("font-weight: bold;")
+        h.addWidget(lbl_res)
+        h.addWidget(self.txt_res)
+        btn = QtWidgets.QPushButton("Update")
+        btn.clicked.connect(self.update_resolution)
+        h.addWidget(btn)
+        lo.addLayout(h)
 
         self.combo_mode = QtWidgets.QComboBox()
         self.combo_mode.addItems(["Strict", "Center", "Coverage"])
@@ -477,20 +592,11 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.chk_4th.toggled.connect(self.update_visibility)
         lo.addWidget(self.chk_4th)
 
-        h = QtWidgets.QHBoxLayout()
-        self.txt_res = QtWidgets.QLineEdit(str(self.current_scan_res))
-        h.addWidget(QtWidgets.QLabel("Scan Px (nm):"))
-        h.addWidget(self.txt_res)
-        btn = QtWidgets.QPushButton("Update")
-        btn.clicked.connect(self.update_resolution)
-        h.addWidget(btn)
-        lo.addLayout(h)
-
         grp.setLayout(lo)
         return grp
 
     def _create_appearance_group(self):
-        grp = QtWidgets.QGroupBox("2. Appearance")
+        grp = QtWidgets.QGroupBox("Appearance")
         lo = QtWidgets.QVBoxLayout()
         lo.setSpacing(2)
 
@@ -527,7 +633,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         return grp
 
     def _create_orient_group(self):
-        grp = QtWidgets.QGroupBox("3. Output Flip")
+        grp = QtWidgets.QGroupBox("Output Flip")
         lo = QtWidgets.QHBoxLayout()
         self.chk_flip_x = QtWidgets.QCheckBox("X")
         self.chk_flip_y = QtWidgets.QCheckBox("Y")
@@ -538,9 +644,10 @@ class CylinderApp(QtWidgets.QMainWindow):
         grp.setLayout(lo)
         return grp
 
-    def _create_roi_shift_group(self):
-        grp = QtWidgets.QGroupBox("4. Shift Bounding Boxes")
-        lo = QtWidgets.QVBoxLayout()
+    def _create_roi_shift_content(self):
+        widget = QtWidgets.QWidget()
+        lo = QtWidgets.QVBoxLayout(widget)
+        lo.setContentsMargins(10, 5, 10, 5)
         lo.setSpacing(2)
         h = QtWidgets.QHBoxLayout()
         self.txt_step = QtWidgets.QLineEdit("10")
@@ -565,11 +672,10 @@ class CylinderApp(QtWidgets.QMainWindow):
         br = QtWidgets.QPushButton("Reset Shift")
         br.clicked.connect(self.reset_rois)
         lo.addWidget(br)
-        grp.setLayout(lo)
-        return grp
+        return widget
 
     def _create_roi_group(self):
-        grp = QtWidgets.QGroupBox("5. Bounding Boxes")
+        grp = QtWidgets.QGroupBox("Bounding Boxes")
         lo = QtWidgets.QVBoxLayout()
         lo.setSpacing(2)
         bnml = QtWidgets.QPushButton("Load NML")
@@ -596,9 +702,10 @@ class CylinderApp(QtWidgets.QMainWindow):
         grp.setLayout(lo)
         return grp
 
-    def _create_manual_group(self):
-        grp = QtWidgets.QGroupBox("6. Manual Cylinders")
-        lo = QtWidgets.QVBoxLayout()
+    def _create_manual_content(self):
+        widget = QtWidgets.QWidget()
+        lo = QtWidgets.QVBoxLayout(widget)
+        lo.setContentsMargins(10, 5, 10, 5)
         lo.setSpacing(2)
         self.txt_man_input = QtWidgets.QTextEdit()
         self.txt_man_input.setPlaceholderText("Paste: X, Y, Z (one per line)")
@@ -626,11 +733,10 @@ class CylinderApp(QtWidgets.QMainWindow):
         b_del_man = QtWidgets.QPushButton("Delete Selected")
         b_del_man.clicked.connect(self.delete_manual_points)
         lo.addWidget(b_del_man)
-        grp.setLayout(lo)
-        return grp
+        return widget
 
     def _create_auto_grid_group(self):
-        grp = QtWidgets.QGroupBox("7. Auto Grid Cylinders")
+        grp = QtWidgets.QGroupBox("Generated Cylinders")
         lo = QtWidgets.QVBoxLayout()
         self.cyl_list_widget = QtWidgets.QListWidget()
         self.cyl_list_widget.itemChanged.connect(self.on_cyl_item_changed)
@@ -648,7 +754,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         return grp
 
     def _create_actions_group(self):
-        grp = QtWidgets.QGroupBox("8. Export & Registration")
+        grp = QtWidgets.QGroupBox("Export & Registration")
         lo = QtWidgets.QVBoxLayout()
 
         be_nml = QtWidgets.QPushButton("EXPORT NML (TILES)")

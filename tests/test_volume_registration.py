@@ -64,6 +64,53 @@ class TestOpticsConfig:
         assert vreg._VolumeRegistration__beam_pitch == -0.02
 
 
+class TestMotorsToRefscan:
+    def test_roundtrip(self):
+        """refscan_to_motors -> motors_to_refscan should recover original coords."""
+        vreg = _make_vreg()
+        refscan_coords = np.array([
+            [500, 600, 700],
+            [800, 300, 400],
+            [1024, 1024, 1024],
+        ], dtype=float)
+        scan_px = 100.0
+        su, sv, sz = vreg.refscan_to_motors(refscan_coords, scan_px)
+        recovered = vreg.motors_to_refscan(su, sv, sz, scan_px)
+        np.testing.assert_allclose(recovered, refscan_coords, atol=1e-6)
+
+    def test_roundtrip_custom_optics(self):
+        """Roundtrip with custom optics parameters."""
+        optics = {
+            "optics_pixel_size_um": 3.0,
+            "z12": 1500,
+            "sx0_mm": 1.5,
+            "rotation_offset_deg": -15.0,
+            "beam_pitch_rad": -0.02,
+        }
+        vreg = _make_vreg(optics=optics)
+        refscan_coords = np.array([
+            [200, 1800, 100],
+            [1500, 500, 1900],
+        ], dtype=float)
+        scan_px = 50.0
+        su, sv, sz = vreg.refscan_to_motors(refscan_coords, scan_px)
+        recovered = vreg.motors_to_refscan(su, sv, sz, scan_px)
+        np.testing.assert_allclose(recovered, refscan_coords, atol=1e-6)
+
+    def test_single_point_at_center(self):
+        """A point at the refscan center should map to the reference volume motor coords."""
+        vreg = _make_vreg()
+        center = np.array([[1024, 1024, 1024]], dtype=float)
+        scan_px = 100.0
+        su, sv, sz = vreg.refscan_to_motors(center, scan_px)
+        # At center, su/sv should be close to ref volume su/sv
+        np.testing.assert_allclose(su, -0.5, atol=1e-4)
+        np.testing.assert_allclose(sv, 0.1, atol=1e-4)
+        # Roundtrip
+        recovered = vreg.motors_to_refscan(su, sv, sz, scan_px)
+        np.testing.assert_allclose(recovered, center, atol=1e-6)
+
+
 class TestFitTransformation:
     def test_svd_identity_transform(self):
         """When prescan == refscan, transform should be near-identity."""

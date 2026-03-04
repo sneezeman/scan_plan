@@ -224,3 +224,42 @@ class VolumeRegistration():
 
         sz_d1 = sz_d1 + (sxd1 - sxr)*np.sin(self.__beam_pitch)
         return final_su, final_sv, sz_d1
+
+    def motors_to_refscan(self, su_coords, sv_coords, sz_coords, scan_pixel_size, scan_pixel_unit='nm'):
+        """Convert motor coordinates (su, sv, sz in mm) back to refscan pixel coordinates.
+
+        This is the inverse of refscan_to_motors(). Useful when the user identifies
+        features directly on the physical sample by moving the stage and recording
+        su/sv/sz motor positions, without performing a refscan.
+        """
+        ref0vol = self.__ref_volumes[0]
+        ps = ureg.Quantity(ref0vol.pixel_size, ref0vol.pixel_unit).to("mm").magnitude
+
+        # Reverse the beam-pitch correction on sz
+        M0 = (ureg.Quantity(self.__optics_pixel_size, 'um') / ureg.Quantity(ref0vol.pixel_size, ref0vol.pixel_unit)).to('dimensionless').magnitude
+        z1r = self.__z12 / M0
+        sxr = z1r + self.__sx0
+        M = (ureg.Quantity(self.__optics_pixel_size, 'um') / ureg.Quantity(scan_pixel_size, scan_pixel_unit)).to('dimensionless').magnitude
+        z1s = self.__z12 / M
+        sxd1 = z1s + self.__sx0
+        sz_corrected = sz_coords - (sxd1 - sxr) * np.sin(self.__beam_pitch)
+
+        # Motor deltas from reference volume origin (mm)
+        su_deltas = su_coords - ref0vol.su
+        sv_deltas = sv_coords - ref0vol.sv
+        sz_deltas = sz_corrected - ref0vol.sz
+
+        # Inverse of _saxy2suv: convert su/sv deltas back to sax/say
+        sax_deltas, say_deltas = self._suv2saxy(
+            ureg.Quantity(su_deltas, 'mm'),
+            ureg.Quantity(sv_deltas, 'mm')
+        )
+
+        # Inverse of the sign/axis swap in refscan_to_motors:
+        #   Forward: sax_deltas = -deltas[:,1], say_deltas = -deltas[:,0], sz_deltas = deltas[:,2]
+        #   Inverse: deltas[:,0] = -say_deltas, deltas[:,1] = -sax_deltas, deltas[:,2] = sz_deltas
+        refscan_x = -say_deltas.to("mm").magnitude / ps + ref0vol.width / 2.0
+        refscan_y = -sax_deltas.to("mm").magnitude / ps + ref0vol.width / 2.0
+        refscan_z = sz_deltas / ps + ref0vol.height / 2.0
+
+        return np.column_stack([refscan_x, refscan_y, refscan_z])

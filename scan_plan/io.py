@@ -102,7 +102,14 @@ def load_config(filepath):
         "prescan_pixel_size_xy": 180,
         "prescan_z_step": 180,
         "scan_pixel_size": 20,
-        "rois": []
+        "rois": [],
+        "optics": {
+            "beam_pitch_rad": -0.015396,
+            "optics_pixel_size_um": 2.952,
+            "z12": 1281,
+            "sx0_mm": 1.28,
+            "rotation_offset_deg": -21.5
+        }
     }
 
     if not os.path.exists(filepath):
