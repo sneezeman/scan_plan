@@ -35,7 +35,7 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 2. Identify bounding box coordinates manually as `x, y, z, w, h, d` (top-left corner + dimensions in pixels)
 3. Enter each ROI directly in the scan-plan UI text field and click **Add**
 
-### No pre-scan (Using an ID16A scan as prescan)
+**No pre-scan (Using an ID16A scan as prescan):**
 
 One can use an ID16A overview tomogram/fasttomo as the prescan volume instead of a separate pre-beamtime overview scan. In this case, the prescan and refscan coordinate systems are already identical. Follow the same workflow (bounding boxes, grid adjustment, export), and at the registration phase leave the table filled with zeros.
 
