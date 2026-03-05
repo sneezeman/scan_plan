@@ -1,6 +1,6 @@
 <img width="300" height="150" alt="Gemini_Generated_Image_upewhiupewhiupew" src="https://github.com/user-attachments/assets/99eb6095-e09c-4395-9b50-4071c6e2aedb" />
 
-GUI for scanning strategy in high-resolution tomography.
+GUI for planning a scanning strategy in high-resolution tomography.
 
 Plan cylindrical scan regions within a 3D prescan volume, pack them efficiently using bounding-box ROIs, and register coordinates between prescan and machine reference frames using dual SVD/Optimizer transformation models.
 
