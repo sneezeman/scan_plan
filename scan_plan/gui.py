@@ -75,21 +75,26 @@ class RegistrationDialog(QtWidgets.QDialog):
         h_tables = QtWidgets.QHBoxLayout()
 
         v_pre = QtWidgets.QVBoxLayout()
-        v_pre.addWidget(QtWidgets.QLabel("<b>PRESCAN</b> (Volume Pixels)"))
+        lbl_pre = QtWidgets.QLabel("<b>PRESCAN</b> — pre-beamtime overview volume (pixels)")
+        lbl_pre.setStyleSheet("background-color: #cce5ff; padding: 4px; border: 2px solid #004085; border-radius: 3px; color: #004085;")
+        v_pre.addWidget(lbl_pre)
         self.table_pre = QtWidgets.QTableWidget(0, 3)
         self.table_pre.setHorizontalHeaderLabels(["X", "Y", "Z"])
         self.table_pre.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.table_pre.setAlternatingRowColors(True)
+        self.table_pre.setStyleSheet("QTableWidget { border: 2px solid #004085; }")
         v_pre.addWidget(self.table_pre)
         h_tables.addLayout(v_pre)
 
         v_ref = QtWidgets.QVBoxLayout()
-        self.lbl_ref_table = QtWidgets.QLabel("<b>REFSCAN</b> (Reference Volume Pixels)")
+        self.lbl_ref_table = QtWidgets.QLabel("<b>REFSCAN</b> — ID16A reference tomogram (pixels)")
+        self.lbl_ref_table.setStyleSheet("background-color: #d4edda; padding: 4px; border: 2px solid #155724; border-radius: 3px; color: #155724;")
         v_ref.addWidget(self.lbl_ref_table)
         self.table_ref = QtWidgets.QTableWidget(0, 3)
         self.table_ref.setHorizontalHeaderLabels(["X", "Y", "Z"])
         self.table_ref.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.table_ref.setAlternatingRowColors(True)
+        self.table_ref.setStyleSheet("QTableWidget { border: 2px solid #155724; }")
         v_ref.addWidget(self.table_ref)
         h_tables.addLayout(v_ref)
         l_pts_main.addLayout(h_tables)
@@ -247,11 +252,15 @@ class RegistrationDialog(QtWidgets.QDialog):
 
     def _on_match_mode_changed(self, index):
         if index == 1:  # Motor Coordinates
-            self.lbl_ref_table.setText("<b>MOTOR COORDS</b> (su/sv/sz in mm)")
+            self.lbl_ref_table.setText("<b>MOTOR COORDS</b> — ID16A stage positions (su/sv/sz in mm)")
+            self.lbl_ref_table.setStyleSheet("background-color: #fff3cd; padding: 4px; border: 2px solid #856404; border-radius: 3px; color: #856404;")
             self.table_ref.setHorizontalHeaderLabels(["su (mm)", "sv (mm)", "sz (mm)"])
+            self.table_ref.setStyleSheet("QTableWidget { border: 2px solid #856404; }")
         else:  # Refscan Pixels
-            self.lbl_ref_table.setText("<b>REFSCAN</b> (Reference Volume Pixels)")
+            self.lbl_ref_table.setText("<b>REFSCAN</b> — ID16A reference tomogram (pixels)")
+            self.lbl_ref_table.setStyleSheet("background-color: #d4edda; padding: 4px; border: 2px solid #155724; border-radius: 3px; color: #155724;")
             self.table_ref.setHorizontalHeaderLabels(["X", "Y", "Z"])
+            self.table_ref.setStyleSheet("QTableWidget { border: 2px solid #155724; }")
 
     def get_points(self):
         prescan, refscan = [], []
@@ -360,13 +369,16 @@ class RegistrationDialog(QtWidgets.QDialog):
             self.res_svd = self.vreg_svd.fitTransformationMatrix(rot_z_only=z_only, method='svd')
             self.res_opt = self.vreg_opt.fitTransformationMatrix(rot_z_only=z_only, method='optimizer')
 
+            n_pts = len(pre_pts)
             err_svd = np.mean(self.res_svd.distances * (self.ref_px / 1000.0))
             err_opt = np.mean(self.res_opt.distances * (self.ref_px / 1000.0))
+            max_svd = np.max(self.res_svd.distances * (self.ref_px / 1000.0))
+            max_opt = np.max(self.res_opt.distances * (self.ref_px / 1000.0))
 
             self.combo_result_select.blockSignals(True)
             self.combo_result_select.clear()
-            self.combo_result_select.addItem(f"SVD (Kabsch) Algorithm - Avg Err: {err_svd:.2f} \u00b5m")
-            self.combo_result_select.addItem(f"SciPy Optimizer - Avg Err: {err_opt:.2f} \u00b5m")
+            self.combo_result_select.addItem(f"SVD (Kabsch) - Avg: {err_svd:.2f} \u00b5m, Max: {max_svd:.2f} \u00b5m ({n_pts} pts)")
+            self.combo_result_select.addItem(f"Optimizer - Avg: {err_opt:.2f} \u00b5m, Max: {max_opt:.2f} \u00b5m ({n_pts} pts)")
             self.combo_result_select.blockSignals(False)
 
             best_idx = 0 if err_svd <= err_opt else 1
@@ -386,11 +398,33 @@ class RegistrationDialog(QtWidgets.QDialog):
         active_res = self.res_svd if idx == 0 else self.res_opt
 
         err_um = active_res.distances * (self.ref_px / 1000.0)
-        self.lbl_rot.setText(str(active_res.rotation_angles))
-        self.lbl_cost.setText(f"{active_res.solution.fun:.4f}")
+        n_pts = len(self.ref_pts)
+        angles = active_res.rotation_angles
+        self.lbl_rot.setText(f"Yaw: {angles[0]:.3f}\u00b0,  Pitch: {angles[1]:.3f}\u00b0,  Roll: {angles[2]:.3f}\u00b0")
+        mean_cost = active_res.solution.fun / n_pts if n_pts > 0 else active_res.solution.fun
+        self.lbl_cost.setText(f"{mean_cost:.4f}  (mean per point, {n_pts} points)")
         self.lbl_msg.setText(active_res.solution.message)
 
-        self.txt_raw.setText(str(active_res.solution.__dict__) if hasattr(active_res.solution, '__dict__') else "Exact Mathematical Solution")
+        # Human-readable summary
+        lines = []
+        lines.append(f"Method: {active_res.solution.message}")
+        lines.append(f"Points: {n_pts}")
+        lines.append(f"Total residual: {active_res.solution.fun:.4f} px")
+        lines.append(f"Mean residual:  {mean_cost:.4f} px")
+        lines.append(f"Mean error:     {np.mean(err_um):.2f} \u00b5m")
+        lines.append(f"Max error:      {np.max(err_um):.2f} \u00b5m")
+        lines.append(f"Min error:      {np.min(err_um):.2f} \u00b5m")
+        lines.append("")
+        lines.append(f"Rotation: Yaw={angles[0]:.4f}\u00b0, Pitch={angles[1]:.4f}\u00b0, Roll={angles[2]:.4f}\u00b0")
+        if hasattr(active_res.solution, 'nit'):
+            lines.append(f"Iterations: {active_res.solution.nit}")
+        if hasattr(active_res.solution, 'nfev'):
+            lines.append(f"Function evaluations: {active_res.solution.nfev}")
+        lines.append("")
+        lines.append("Per-point errors (\u00b5m):")
+        for i, e in enumerate(err_um):
+            lines.append(f"  Point {i}: {e:.2f} \u00b5m")
+        self.txt_raw.setText("\n".join(lines))
 
         self.table_results.setRowCount(len(self.ref_pts))
         for i in range(len(self.ref_pts)):
