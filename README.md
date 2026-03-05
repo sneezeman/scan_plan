@@ -26,8 +26,7 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 
 1. Upload prescan volume to WebKnossos
 2. Draw bounding boxes around regions of interest
-3. Export the annotation and load the .nml file into scan-plan via the **Load NML** button
-
+3. Export the annotation and load the .nml file into scan-plan via the **Load NML** button\
 **OR** Copy-paste the bounding boxes' coordinates from WebKnossos directly to the scan-plan application.
 
 **Fiji / manual path:**
