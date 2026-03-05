@@ -65,6 +65,10 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 5. Review per-point errors in the Results tab
 6. Click **SAVE MACHINE COORDINATES** to export all output files
 
+### Using an ID16A scan as prescan (high-resolution use case)
+
+When very high resolution is needed (~20 nm), you can use a previous ID16A tomogram as the prescan volume instead of a separate pre-beamtime overview scan. In this case the prescan and refscan coordinate systems are already identical — the volumes are perfectly synchronized by default. Follow the same workflow (bounding boxes, grid adjustment, export), but **skip the registration step entirely**: just export NML tiles or print coordinates directly without opening the Registration Dialog.
+
 ## Configuration
 
 The JSON config file controls volume loading and scan parameters. See `scan_plan_config.example.json` for a full template. If the config file does not exist, a default example is auto-generated.
