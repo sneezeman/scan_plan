@@ -35,6 +35,10 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 2. Identify bounding box coordinates manually as `x, y, z, w, h, d` (top-left corner + dimensions in pixels)
 3. Enter each ROI directly in the scan-plan UI text field and click **Add**
 
+### No pre-scan (Using an ID16A scan as prescan)
+
+One can use an ID16A overview tomogram/fasttomo as the prescan volume instead of a separate pre-beamtime overview scan. In this case, the prescan and refscan coordinate systems are already identical. Follow the same workflow (bounding boxes, grid adjustment, export), and at the registration phase leave the table filled with zeros.
+
 ### 2. Configure and launch scan-plan
 
 1. Edit your JSON config file (see [Configuration](#configuration)):
@@ -64,10 +68,6 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 4. Click **Calculate & Verify Models** to fit both SVD and Optimizer models
 5. Review per-point errors in the Results tab
 6. Click **SAVE MACHINE COORDINATES** to export all output files
-
-### Using an ID16A scan as prescan (high-resolution use case)
-
-When very high resolution is needed (~20 nm), you can use a previous ID16A tomogram as the prescan volume instead of a separate pre-beamtime overview scan. In this case the prescan and refscan coordinate systems are already identical — the volumes are perfectly synchronized by default. Follow the same workflow (bounding boxes, grid adjustment, export), but **skip the registration step entirely**: just export NML tiles or print coordinates directly without opening the Registration Dialog.
 
 ## Configuration
 
