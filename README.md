@@ -13,7 +13,7 @@ Recommended setup with conda:
 ```bash
 conda create -n scan_plan python=3.13 -y
 conda activate scan_plan
-pip install -e ".[test]"
+pip install -e
 ```
 
 ## Workflow
