@@ -109,6 +109,11 @@ def load_config(filepath):
             "z12": 1281,
             "sx0_mm": 1.28,
             "rotation_offset_deg": -21.5
+        },
+        "motor_limits": {
+            "su": [-0.762, 0.762],
+            "sv": [-0.73, 0.762],
+            "sz": [-3.32, 3.5]
         }
     }
 

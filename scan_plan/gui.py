@@ -463,6 +463,22 @@ class RegistrationDialog(QtWidgets.QDialog):
             except ValueError: final_px = 100.0
 
             su, sv, sz = active_vreg.refscan_to_motors(XYZcoords_refscan, final_px)
+
+            # Check motor limits
+            limits = self.main_app.cfg.get('motor_limits', {})
+            warnings = []
+            for axis_name, values in [("su", su), ("sv", sv), ("sz", sz)]:
+                lim = limits.get(axis_name)
+                if lim is None:
+                    continue
+                lo, hi = lim
+                for i, v in enumerate(values):
+                    if v < lo or v > hi:
+                        warnings.append(f"  Cylinder {i}: {axis_name} = {v:.4f} mm (limits: [{lo}, {hi}])")
+            if warnings:
+                msg = f"{len(warnings)} cylinder(s) exceed motor travel limits:\n\n" + "\n".join(warnings)
+                QtWidgets.QMessageBox.warning(self, "Motor Limit Warning", msg)
+
             df = pd.DataFrame(np.array([su, sv, sz]).T, columns=["#su", "sv", "sz"])
 
             options = QtWidgets.QFileDialog.Options()
