@@ -92,6 +92,13 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         return None, None
 
 
+def _load_instrument_defaults():
+    """Load instrument defaults (optics, motor limits) from bundled JSON."""
+    path = os.path.join(os.path.dirname(__file__), 'instrument_defaults.json')
+    with open(path, 'r') as f:
+        return json.load(f)
+
+
 def load_config(filepath):
     default_config = {
         "volume_path": "/path/to/your/scan/example_norec_.vol",
@@ -102,33 +109,29 @@ def load_config(filepath):
         "prescan_pixel_size_xy": 180,
         "prescan_z_step": 180,
         "scan_pixel_size": 20,
-        "rois": [],
-        "optics": {
-            "beam_pitch_rad": -0.015396,
-            "optics_pixel_size_um": 2.952,
-            "z12": 1281,
-            "sx0_mm": 1.28,
-            "rotation_offset_deg": -21.5
-        },
-        "motor_limits": {
-            "su": [-0.762, 0.762],
-            "sv": [-0.73, 0.762],
-            "sz": [-3.32, 3.5]
-        }
+        "rois": []
     }
 
     if not os.path.exists(filepath):
         logger.info("Config file not found. Creating default: %s", filepath)
         with open(filepath, 'w') as f:
             json.dump(default_config, f, indent=4)
-        return default_config
+        cfg = default_config
+    else:
+        with open(filepath, 'r') as f:
+            try:
+                cfg = json.load(f)
+            except Exception as e:
+                logger.error("Failed to parse config JSON: %s", e)
+                cfg = default_config
 
-    with open(filepath, 'r') as f:
-        try:
-            return json.load(f)
-        except Exception as e:
-            logger.error("Failed to parse config JSON: %s", e)
-            return default_config
+    # Merge instrument defaults — user config values take precedence
+    instrument = _load_instrument_defaults()
+    for key, value in instrument.items():
+        if key not in cfg:
+            cfg[key] = value
+
+    return cfg
 
 
 def detect_tiff_dims(filepath, config, config_path):

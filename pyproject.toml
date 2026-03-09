@@ -22,5 +22,8 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest"]
 
+[tool.setuptools.package-data]
+scan_plan = ["instrument_defaults.json"]
+
 [project.scripts]
 scan-plan = "scan_plan.scan_plan:main"
