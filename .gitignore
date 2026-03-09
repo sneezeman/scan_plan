@@ -16,12 +16,17 @@ Thumbs.db
 # Auto-generated configs and outputs
 scan_plan_config.json
 *_motor_coords.txt
+*_fiji.txt
 *_webknossos.txt
 *_match_pairs.txt
 *.nml
+
+# Claude Code
+CLAUDE.md
 
 # Virtual environments
 venv/
 env/
 .venv/
 *.egg-info/
+.pytest_cache/
