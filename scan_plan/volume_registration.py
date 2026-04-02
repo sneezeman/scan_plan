@@ -122,36 +122,69 @@ class VolumeRegistration():
 
         if method == 'svd':
             # --- SVD / Kabsch Algorithm ---
+            # Try both pure rotation and X-flipped rotation, keep the better fit.
+            # X-flip matrix: flips the first axis before rotating.
+            F_x = np.diag([-1, 1, 1])
+
             if rot_z_only:
                 H = np.dot(P[:, :2].T, Q[:, :2])
                 U, S, Vt = np.linalg.svd(H)
                 R_2d = np.dot(Vt.T, U.T)
-                
-                # Check reflection
                 if np.linalg.det(R_2d) < 0:
                     Vt[-1, :] *= -1
                     R_2d = np.dot(Vt.T, U.T)
-                    
-                R_mat = np.eye(3)
-                R_mat[:2, :2] = R_2d
+                R_rot = np.eye(3)
+                R_rot[:2, :2] = R_2d
+
+                # Flipped variant: apply X-flip to P, then re-solve
+                P_flip = P @ F_x.T
+                H_f = np.dot(P_flip[:, :2].T, Q[:, :2])
+                U_f, S_f, Vt_f = np.linalg.svd(H_f)
+                R_2d_f = np.dot(Vt_f.T, U_f.T)
+                if np.linalg.det(R_2d_f) < 0:
+                    Vt_f[-1, :] *= -1
+                    R_2d_f = np.dot(Vt_f.T, U_f.T)
+                R_flip = np.eye(3)
+                R_flip[:2, :2] = R_2d_f
+                R_flip = R_flip @ F_x  # combine: flip then rotate
             else:
                 H = np.dot(P.T, Q)
                 U, S, Vt = np.linalg.svd(H)
-                R_mat = np.dot(Vt.T, U.T)
-                
-                if np.linalg.det(R_mat) < 0:
+                R_rot = np.dot(Vt.T, U.T)
+                if np.linalg.det(R_rot) < 0:
                     Vt[-1, :] *= -1
-                    R_mat = np.dot(Vt.T, U.T)
+                    R_rot = np.dot(Vt.T, U.T)
+
+                # Flipped variant
+                P_flip = P @ F_x.T
+                H_f = np.dot(P_flip.T, Q)
+                U_f, S_f, Vt_f = np.linalg.svd(H_f)
+                R_flip = np.dot(Vt_f.T, U_f.T)
+                if np.linalg.det(R_flip) < 0:
+                    Vt_f[-1, :] *= -1
+                    R_flip = np.dot(Vt_f.T, U_f.T)
+                R_flip = R_flip @ F_x  # combine: flip then rotate
+
+            # Pick the solution with lower residual
+            err_rot  = np.sum(np.linalg.norm(Q - (P @ R_rot.T), axis=1))
+            err_flip = np.sum(np.linalg.norm(Q - (P @ R_flip.T), axis=1))
+
+            if err_flip < err_rot:
+                R_mat = R_flip
+                svd_note = " (with X-flip)"
+            else:
+                R_mat = R_rot
+                svd_note = ""
 
             # Convert Rotation matrix to Euler angles
             final_angles = R.from_matrix(R_mat).as_euler('xyz', degrees=True)
             self.__transformationMatrix = self._getTransformation(*final_angles, 0, 0, 0)
-            
+
             # Create a dummy solution object for compatibility
             class SVDSolution: pass
             sol = SVDSolution()
             sol.fun = np.sum(np.linalg.norm(Q - self.__transformationMatrix.apply(P), axis=1))
-            sol.message = "SVD (Kabsch) Exact Mathematical Solution"
+            sol.message = f"SVD (Kabsch) Exact Mathematical Solution{svd_note}"
             
         else:
             # --- SciPy Optimizer ---
