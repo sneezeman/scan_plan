@@ -41,6 +41,7 @@ class VolumeRegistration():
         self.__ref_volumes = []
         self.__datapoints = []
         self.__transformationMatrix = None
+        self.__x_flip = False
         self.__beam_pitch = optics.get('beam_pitch_rad', pitch)
         self.__optics_pixel_size = optics.get('optics_pixel_size_um', 2.952)
         self.__z12 = optics.get('z12', 1281)
@@ -170,24 +171,33 @@ class VolumeRegistration():
             err_flip = np.sum(np.linalg.norm(Q - (P @ R_flip.T), axis=1))
 
             if err_flip < err_rot:
-                R_mat = R_flip
+                # R_flip has det=-1 (improper rotation).
+                # Decompose: R_flip = R_pure @ F_x, so R_pure = R_flip @ F_x
+                R_pure = R_flip @ F_x
+                self.__x_flip = True
                 svd_note = " (with X-flip)"
             else:
-                R_mat = R_rot
+                R_pure = R_rot
+                self.__x_flip = False
                 svd_note = ""
 
-            # Convert Rotation matrix to Euler angles
-            final_angles = R.from_matrix(R_mat).as_euler('xyz', degrees=True)
+            # Convert proper rotation to Euler angles
+            final_angles = R.from_matrix(R_pure).as_euler('xyz', degrees=True)
             self.__transformationMatrix = self._getTransformation(*final_angles, 0, 0, 0)
 
             # Create a dummy solution object for compatibility
             class SVDSolution: pass
             sol = SVDSolution()
-            sol.fun = np.sum(np.linalg.norm(Q - self.__transformationMatrix.apply(P), axis=1))
+            # Verify residual with the full transform (flip + rotation)
+            P_test = P.copy()
+            if self.__x_flip:
+                P_test[:, 0] *= -1
+            sol.fun = np.sum(np.linalg.norm(Q - self.__transformationMatrix.apply(P_test), axis=1))
             sol.message = f"SVD (Kabsch) Exact Mathematical Solution{svd_note}"
             
         else:
-            # --- SciPy Optimizer ---
+            # --- SciPy Optimizer (proper rotation only, no flip) ---
+            self.__x_flip = False
             def getTransformedCoordinates(coords, yaw, pitch, roll, tx, ty, tz):
                 Tf_A_B = self._getTransformation(yaw, pitch, roll, tx, ty, tz)
                 return Tf_A_B.apply(coords)
@@ -231,7 +241,11 @@ class VolumeRegistration():
             
     def transformToRefscan(self, prescan_coords):
         prescan_coords_scaled = self._scale_prescan(prescan_coords)
-        return self.__transformationMatrix.apply(prescan_coords_scaled - self._prescan_offset_scaled) + self._refscan_offset
+        centered = prescan_coords_scaled - self._prescan_offset_scaled
+        if self.__x_flip:
+            centered = centered.copy()
+            centered[:, 0] *= -1
+        return self.__transformationMatrix.apply(centered) + self._refscan_offset
     
     def refscan_to_motors(self, refscan_coords, scan_pixel_size, scan_pixel_unit='nm'):
         ref0vol = self.__ref_volumes[0]
