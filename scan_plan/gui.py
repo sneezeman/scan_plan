@@ -369,8 +369,22 @@ class RegistrationDialog(QtWidgets.QDialog):
             self.update_matrix(pre_pts, self.ref_pts, self.vreg_svd)
             z_only = self.chk_z_only.isChecked()
 
-            self.res_svd = self.vreg_svd.fitTransformationMatrix(rot_z_only=z_only, method='svd')
-            self.res_opt = self.vreg_opt.fitTransformationMatrix(rot_z_only=z_only, method='optimizer')
+            progress = QtWidgets.QProgressDialog(
+                "Computing registration...", None, 0, 0, self)
+            progress.setWindowTitle("Registration")
+            progress.setWindowModality(QtCore.Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setCancelButton(None)
+            progress.show()
+            QtWidgets.QApplication.processEvents()
+
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+            try:
+                self.res_svd = self.vreg_svd.fitTransformationMatrix(rot_z_only=z_only, method='svd')
+                self.res_opt = self.vreg_opt.fitTransformationMatrix(rot_z_only=z_only, method='optimizer')
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+                progress.close()
 
             n_pts = len(pre_pts)
             err_svd = np.mean(self.res_svd.distances * (self.ref_px / 1000.0))
@@ -982,8 +996,15 @@ class CylinderApp(QtWidgets.QMainWindow):
 
     def recalculate_points(self):
         mode = self.combo_mode.currentText().lower()
-        self.all_points, self.dims_std, self.dims_exp = solve_global_union(self.rois, self.current_scan_res, self.cfg, mode)
-        self.active_mask = np.ones(len(self.all_points), dtype=bool)
+        old_count = len(self.all_points)
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            self.all_points, self.dims_std, self.dims_exp = solve_global_union(self.rois, self.current_scan_res, self.cfg, mode)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        new_count = len(self.all_points)
+        if new_count != old_count or len(self.active_mask) != new_count:
+            self.active_mask = np.ones(new_count, dtype=bool)
         self.refresh_cyl_list()
         self.update_3d_scene()
 
@@ -1003,10 +1024,17 @@ class CylinderApp(QtWidgets.QMainWindow):
     def refresh_cyl_list(self):
         self.cyl_list_widget.blockSignals(True)
         self.cyl_list_widget.clear()
+        current_seq = 0
         for i, p in enumerate(self.all_points):
-            item = QtWidgets.QListWidgetItem(f"Seq #{i} (Orig {i}): {p.astype(int)}")
+            checked = bool(self.active_mask[i]) if i < len(self.active_mask) else True
+            if checked:
+                label = f"Seq #{current_seq} (Orig {i}): {p.astype(int)}"
+                current_seq += 1
+            else:
+                label = f"--- (Orig {i}): {p.astype(int)}"
+            item = QtWidgets.QListWidgetItem(label)
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
-            item.setCheckState(QtCore.Qt.Checked)
+            item.setCheckState(QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
             self.cyl_list_widget.addItem(item)
         self.cyl_list_widget.blockSignals(False)
 

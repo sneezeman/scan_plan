@@ -301,3 +301,73 @@ class TestFitTransformation:
         vreg1.addMatchPoint((500, 500, 500), (500, 500, 500), 0)
         with pytest.raises(ValueError):
             vreg1.fitTransformationMatrix(rot_z_only=True, method='svd')
+
+
+class TestNearSingularWarning:
+    """SVD should warn when match points are nearly collinear or coincident."""
+
+    def test_collinear_points_rot_z_only(self):
+        """Collinear 2D points produce a rank-deficient H; warning expected."""
+        vreg = _make_vreg()
+        # All points along the line y = x (with varying z).
+        # In 2D projection, cross-covariance has rank 1 -> min(S) ~ 0.
+        for t in (0, 100, 200, 300):
+            vreg.addMatchPoint(
+                (500.0 + t, 500.0 + t, 500.0),
+                (500.0 + t, 500.0 + t, 500.0),
+                0,
+            )
+        result = vreg.fitTransformationMatrix(rot_z_only=True, method='svd')
+        assert "WARNING" in result.solution.message, (
+            f"Expected WARNING in message, got: {result.solution.message}"
+        )
+        assert "poorly constrained" in result.solution.message
+
+    def test_collinear_points_full_3d(self):
+        """Collinear 3D points produce a rank-deficient H; warning expected."""
+        vreg = _make_vreg()
+        # All points along a single line in 3D.
+        for t in (0, 100, 200, 300):
+            vreg.addMatchPoint(
+                (500.0 + t, 500.0 + t, 500.0 + t),
+                (500.0 + t, 500.0 + t, 500.0 + t),
+                0,
+            )
+        result = vreg.fitTransformationMatrix(rot_z_only=False, method='svd')
+        assert "WARNING" in result.solution.message, (
+            f"Expected WARNING in message, got: {result.solution.message}"
+        )
+        assert "poorly constrained" in result.solution.message
+
+    def test_coincident_points(self):
+        """Nearly coincident points make H ~ 0; warning expected."""
+        vreg = _make_vreg()
+        eps = 1e-10
+        for i in range(4):
+            vreg.addMatchPoint(
+                (500.0 + i * eps, 500.0, 500.0),
+                (500.0 + i * eps, 500.0, 500.0),
+                0,
+            )
+        result = vreg.fitTransformationMatrix(rot_z_only=False, method='svd')
+        assert "WARNING" in result.solution.message, (
+            f"Expected WARNING in message, got: {result.solution.message}"
+        )
+
+    def test_well_conditioned_no_warning(self):
+        """Well-spread points should NOT trigger the warning."""
+        vreg = _make_vreg()
+        _add_test_points(vreg)
+        result = vreg.fitTransformationMatrix(rot_z_only=True, method='svd')
+        assert "WARNING" not in result.solution.message, (
+            f"Unexpected WARNING in message: {result.solution.message}"
+        )
+
+    def test_well_conditioned_full_3d_no_warning(self):
+        """Well-spread 3D points should NOT trigger the warning."""
+        vreg = _make_vreg()
+        _add_test_points(vreg)
+        result = vreg.fitTransformationMatrix(rot_z_only=False, method='svd')
+        assert "WARNING" not in result.solution.message, (
+            f"Unexpected WARNING in message: {result.solution.message}"
+        )

@@ -185,10 +185,17 @@ class VolumeRegistration():
                 R_pure = R_flip @ F_x
                 self.__x_flip = True
                 svd_note = " (with X-flip)"
+                S_winner = S_f
             else:
                 R_pure = R_rot
                 self.__x_flip = False
                 svd_note = ""
+                S_winner = S
+
+            # Check condition number of the winning SVD for near-singular H
+            cond = S_winner.min() / S_winner.max() if S_winner.max() > 0 else 0
+            if cond < 1e-6:
+                svd_note += " WARNING: poorly constrained rotation (near-collinear points)"
 
             # Convert proper rotation to Euler angles
             final_angles = R.from_matrix(R_pure).as_euler('xyz', degrees=True)

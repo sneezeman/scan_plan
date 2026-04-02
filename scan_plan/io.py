@@ -51,8 +51,13 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         else:
             dtype = np.dtype(dtype_str)
             x, y, z = dims
+            expected_elements = x * y * z
             data = np.memmap(filepath, dtype=dtype, mode='r',
                              offset=header_bytes, shape=(z, y, x))
+            if data.size != expected_elements:
+                raise ValueError(
+                    f"Expected {expected_elements} elements but got {data.size}"
+                )
 
         data = np.squeeze(data)
         if data.ndim > 3:
@@ -84,8 +89,8 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         grid.point_data["values"] = data.ravel(order="F")
         return grid, data
 
-    except Exception as e:
-        logger.error("Failed to load volume: %s", e, exc_info=True)
+    except (IOError, OSError, ValueError, MemoryError, tifffile.TiffFileError) as e:
+        logger.warning("Failed to load volume: %s", e, exc_info=True)
         return None, None
 
 
@@ -149,11 +154,19 @@ def load_config(filepath):
     return cfg
 
 
-def detect_tiff_dims(filepath, config, config_path):
-    """Auto-detect TIFF dimensions and update config if they differ."""
+def detect_tiff_dims(filepath):
+    """Auto-detect TIFF dimensions and dtype.
+
+    Returns ``(dims, dtype_str)`` where *dims* is ``[x, y, z]`` and
+    *dtype_str* is the NumPy dtype name (e.g. ``'uint16'``), or ``None``
+    if *filepath* is not a TIFF or cannot be read.
+
+    This is a **pure** function: it reads the file but never mutates
+    external state or writes to disk.
+    """
     ext = os.path.splitext(filepath)[1].lower()
     if ext not in ['.tif', '.tiff'] or not os.path.exists(filepath):
-        return
+        return None
 
     try:
         with tifffile.TiffFile(filepath) as tif:
@@ -170,10 +183,7 @@ def detect_tiff_dims(filepath, config, config_path):
                 t_shape = t_shape[-3:]
 
             new_dims = [t_shape[2], t_shape[1], t_shape[0]]
-            if config['raw_dims'] != new_dims or config['raw_dtype'] != str(t_dtype):
-                config['raw_dims'] = new_dims
-                config['raw_dtype'] = str(t_dtype)
-                with open(config_path, 'w') as f:
-                    json.dump(config, f, indent=4)
+            return new_dims, str(t_dtype)
     except Exception as e:
         logger.debug(f"TIFF shape parse fallback used: {e}")
+        return None
