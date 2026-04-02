@@ -553,6 +553,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.actor_std = None
         self.actor_exp = None
         self.actor_man = None
+        self.actor_man_exp = None
         self.vol_actor = None
         self.actor_labels = None
 
@@ -1058,6 +1059,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         if self.actor_std: self.plotter.remove_actor(self.actor_std)
         if self.actor_exp: self.plotter.remove_actor(self.actor_exp)
         if self.actor_man: self.plotter.remove_actor(self.actor_man)
+        if self.actor_man_exp: self.plotter.remove_actor(self.actor_man_exp)
         if self.actor_labels: self.plotter.remove_actor(self.actor_labels)
 
         for act in self.roi_actors:
@@ -1106,6 +1108,10 @@ class CylinderApp(QtWidgets.QMainWindow):
                 c_man = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_std[0]/2, height=vis_H_std)
                 self.actor_man = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man, scale=False), color='yellow', opacity=self.slider_cyl.value()/100)
 
+                vis_H_exp = self.dims_exp[1] * self.z_ratio
+                c_man_exp = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_exp[0]/2, height=vis_H_exp)
+                self.actor_man_exp = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man_exp, scale=False), color='yellow', opacity=self.slider_cyl.value()/100)
+
                 for pt in mp:
                     label_points.append(pt)
                     label_ids.append(f"M{seq}")
@@ -1129,12 +1135,15 @@ class CylinderApp(QtWidgets.QMainWindow):
         show = self.chk_4th.isChecked()
         if self.actor_std: self.actor_std.SetVisibility(not show)
         if self.actor_exp: self.actor_exp.SetVisibility(show)
+        if self.actor_man: self.actor_man.SetVisibility(not show)
+        if self.actor_man_exp: self.actor_man_exp.SetVisibility(show)
 
     def update_opacity(self):
         cyl_op = self.slider_cyl.value() / 100.0
         if self.actor_std: self.actor_std.GetProperty().SetOpacity(cyl_op)
         if self.actor_exp: self.actor_exp.GetProperty().SetOpacity(cyl_op)
         if self.actor_man: self.actor_man.GetProperty().SetOpacity(cyl_op)
+        if self.actor_man_exp: self.actor_man_exp.GetProperty().SetOpacity(cyl_op)
 
         if self.vol_actor:
             try: vol_max = float(self.txt_vol_max.text())
