@@ -33,7 +33,7 @@ class RegistrationResult(typing.NamedTuple):
 
 class VolumeRegistration():
     
-    def __init__(self, prescan_pixelsize, prescan_pixelunits='nm', flipped=False, pitch=-0.015396, optics=None):
+    def __init__(self, prescan_pixelsize, prescan_pixelunits='nm', pitch=-0.015396, optics=None):
         if optics is None:
             optics = {}
         self.__prescan_pixelsize = prescan_pixelsize
@@ -68,8 +68,10 @@ class VolumeRegistration():
         return su, sv
         
     def addMatchPoint(self, prescan_coordinate: tuple, refscan_coordinate: tuple, ref_id : int):
-        assert isinstance(prescan_coordinate, tuple)
-        assert isinstance(refscan_coordinate, tuple)
+        if not isinstance(prescan_coordinate, tuple):
+            raise TypeError("prescan_coordinate must be a tuple")
+        if not isinstance(refscan_coordinate, tuple):
+            raise TypeError("refscan_coordinate must be a tuple")
         
         if len(self.__ref_volumes) == 0 : raise RuntimeError("At least one reference volume must be given!")
         if ref_id >= len(self.__ref_volumes): raise RuntimeError("Please insert your reference volume first!")
@@ -107,6 +109,13 @@ class VolumeRegistration():
         Calculates transformation using either SciPy Optimizer or SVD Kabsch algorithm.
         """
         ndata = len(self.__datapoints)
+        min_points = 2 if rot_z_only else 3
+        if ndata < min_points:
+            raise ValueError(
+                f"Need at least {min_points} match points for "
+                f"{'rot_z_only' if rot_z_only else 'full'} registration, "
+                f"got {ndata}"
+            )
         refscan_coords = np.empty((ndata, 3))
         prescan_coords = np.empty((ndata, 3))
         
@@ -265,7 +274,7 @@ class VolumeRegistration():
     
     def refscan_to_motors(self, refscan_coords, scan_pixel_size, scan_pixel_unit='nm'):
         ref0vol = self.__ref_volumes[0]
-        deltas = (refscan_coords - np.array([ref0vol.width, ref0vol.width, ref0vol.height], dtype=np.float32)/2.) * ureg.Quantity(ref0vol.pixel_size, ref0vol.pixel_unit).to("mm")
+        deltas = (refscan_coords - np.array([ref0vol.width, ref0vol.width, ref0vol.height])/2.) * ureg.Quantity(ref0vol.pixel_size, ref0vol.pixel_unit).to("mm")
         
         sax_deltas = -deltas[:,1] 
         say_deltas = -deltas[:,0] 

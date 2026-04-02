@@ -1,3 +1,4 @@
+import math
 import xml.etree.ElementTree as ET
 
 def generate_nml(filename, points, D, H, color_hex="#00FFFF"):
@@ -13,9 +14,9 @@ def generate_nml(filename, points, D, H, color_hex="#00FFFF"):
 
     for i, pt in enumerate(points):
         # WebKnossos expects TopLeft (Center - Dim/2)
-        tlx = int(pt[0] - D/2)
-        tly = int(pt[1] - D/2)
-        tlz = int(pt[2] - H/2)
+        tlx = math.floor(pt[0] - D/2)
+        tly = math.floor(pt[1] - D/2)
+        tlz = math.floor(pt[2] - H/2)
 
         bbox = ET.SubElement(params, "userBoundingBox")
         bbox.set("id", str(i+1))

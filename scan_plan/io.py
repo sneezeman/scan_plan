@@ -51,11 +51,8 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         else:
             dtype = np.dtype(dtype_str)
             x, y, z = dims
-            expected_elements = x * y * z
-            with open(filepath, 'rb') as f:
-                if header_bytes > 0: f.seek(header_bytes)
-                data = np.fromfile(f, dtype=dtype, count=expected_elements)
-            data = data.reshape((z, y, x))
+            data = np.memmap(filepath, dtype=dtype, mode='r',
+                             offset=header_bytes, shape=(z, y, x))
 
         data = np.squeeze(data)
         if data.ndim > 3:
@@ -84,7 +81,7 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         grid.dimensions = data.shape
         grid.origin = (0, 0, 0)
         grid.spacing = display_spacing
-        grid.point_data["values"] = data.flatten(order="F")
+        grid.point_data["values"] = data.ravel(order="F")
         return grid, data
 
     except Exception as e:
@@ -97,6 +94,26 @@ def _load_instrument_defaults():
     path = os.path.join(os.path.dirname(__file__), 'instrument_defaults.json')
     with open(path, 'r') as f:
         return json.load(f)
+
+
+def _deep_merge(defaults, overrides):
+    """Recursively merge *defaults* under *overrides*.
+
+    For every key in *defaults*:
+    - If the key is missing from *overrides*, use the default value.
+    - If both values are dicts, recurse so that partial user dicts still
+      inherit missing sub-keys from the defaults.
+    - Otherwise the user value in *overrides* wins.
+
+    Returns a new dict (neither input is mutated).
+    """
+    merged = dict(defaults)
+    for key, value in overrides.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def load_config(filepath):
@@ -127,9 +144,7 @@ def load_config(filepath):
 
     # Merge instrument defaults — user config values take precedence
     instrument = _load_instrument_defaults()
-    for key, value in instrument.items():
-        if key not in cfg:
-            cfg[key] = value
+    cfg = _deep_merge(instrument, cfg)
 
     return cfg
 

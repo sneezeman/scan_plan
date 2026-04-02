@@ -14,7 +14,7 @@ dependencies = [
     "pyvista",
     "pyvistaqt",
     "pandas",
-    "scipy",
+    "scipy>=1.15",
     "PyQt5",
     "pint"
 ]

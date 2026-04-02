@@ -56,7 +56,8 @@ def main():
         g, d = None, None
 
     c = calculate_contrast_limits(d)
-    w = CylinderApp(cfg, g, d, c)
+    del d  # free raw volume data now that contrast limits are computed
+    w = CylinderApp(cfg, g, c)
     w.show()
     sys.exit(app.exec_())
 

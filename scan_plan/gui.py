@@ -19,8 +19,10 @@ from scan_plan.solver import solve_global_union
 
 class RegistrationDialog(QtWidgets.QDialog):
     def __init__(self, main_app):
-        super().__init__()
+        super().__init__(parent=main_app)
         self.main_app = main_app
+        self.ref_pts = []
+        self.ref_px = 0
         self.vreg_svd = None
         self.vreg_opt = None
         self.res_svd = None
@@ -217,7 +219,8 @@ class RegistrationDialog(QtWidgets.QDialog):
                 for c in range(3):
                     self.table_pre.setItem(cur, c, QtWidgets.QTableWidgetItem(parts[c]))
                     self.table_ref.setItem(cur, c, QtWidgets.QTableWidgetItem(parts[c+3]))
-        self.lbl_result.setText(f"Status: Pasted {len(lines)} rows.")
+        added = self.table_pre.rowCount()
+        self.lbl_result.setText(f"Status: Pasted {added} of {len(lines)} rows.")
 
     def load_match_points_from_file(self):
         options = QtWidgets.QFileDialog.Options()
@@ -379,10 +382,10 @@ class RegistrationDialog(QtWidgets.QDialog):
             self.combo_result_select.clear()
             self.combo_result_select.addItem(f"SVD (Kabsch) - Avg: {err_svd:.2f} \u00b5m, Max: {max_svd:.2f} \u00b5m ({n_pts} pts)")
             self.combo_result_select.addItem(f"Optimizer - Avg: {err_opt:.2f} \u00b5m, Max: {max_opt:.2f} \u00b5m ({n_pts} pts)")
-            self.combo_result_select.blockSignals(False)
 
             best_idx = 0 if err_svd <= err_opt else 1
             self.combo_result_select.setCurrentIndex(best_idx)
+            self.combo_result_select.blockSignals(False)
 
             self.lbl_result.setText("Status: Fit Complete. Check Results Tab.")
             self.update_results_ui()
@@ -448,10 +451,7 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         active_vreg = self.vreg_svd if idx == 0 else self.vreg_opt
 
-        pts = self.main_app.get_all_active_points()
-        if self.main_app.chk_flip_x.isChecked(): pts[:, 0] = self.main_app.max_dims[0] - pts[:, 0]
-        if self.main_app.chk_flip_y.isChecked(): pts[:, 1] = self.main_app.max_dims[1] - pts[:, 1]
-        if self.main_app.chk_flip_z.isChecked(): pts[:, 2] = self.main_app.max_dims[2] - pts[:, 2]
+        pts = self.main_app.apply_output_flips(self.main_app.get_all_active_points())
 
         if len(pts) == 0:
             QtWidgets.QMessageBox.warning(self, "Error", "No active cylinders.")
@@ -509,12 +509,11 @@ class RegistrationDialog(QtWidgets.QDialog):
 
 
 class CylinderApp(QtWidgets.QMainWindow):
-    def __init__(self, config, vol_grid, vol_data, clim):
+    def __init__(self, config, vol_grid, clim):
         super().__init__()
         self.cfg = config
         self.rois = [r.copy() for r in config.get('rois', [])]
         self.vol_grid = vol_grid
-        self.vol_data_orig = vol_data
         self.clim = clim
 
         self.z_ratio = config['prescan_z_step'] / config['prescan_pixel_size_xy']
@@ -675,7 +674,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         h_vol.addWidget(QtWidgets.QLabel("Max:"))
         self.txt_vol_max = QtWidgets.QLineEdit("1.0")
         self.txt_vol_max.setFixedWidth(40)
-        self.txt_vol_max.editingFinished.connect(self.update_opacity)
+        self.txt_vol_max.returnPressed.connect(self.update_opacity)
         h_vol.addWidget(self.txt_vol_max)
         lo.addLayout(h_vol)
 
@@ -890,6 +889,14 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.active_manual_mask[self.man_list_widget.row(item)] = (item.checkState() == QtCore.Qt.Checked)
         self.update_3d_scene()
 
+    def apply_output_flips(self, pts):
+        """Apply output flip checkboxes to a copy of the points array."""
+        pts = pts.copy()
+        if self.chk_flip_x.isChecked(): pts[:, 0] = self.max_dims[0] - pts[:, 0]
+        if self.chk_flip_y.isChecked(): pts[:, 1] = self.max_dims[1] - pts[:, 1]
+        if self.chk_flip_z.isChecked(): pts[:, 2] = self.max_dims[2] - pts[:, 2]
+        return pts
+
     def get_all_active_points(self):
         final_points = []
         idx_auto = np.where(self.active_mask)[0]
@@ -1019,6 +1026,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.update_3d_scene()
 
     def update_3d_scene(self):
+        self.plotter.suppress_rendering = True
         if self.actor_std: self.plotter.remove_actor(self.actor_std)
         if self.actor_exp: self.plotter.remove_actor(self.actor_exp)
         if self.actor_man: self.plotter.remove_actor(self.actor_man)
@@ -1084,6 +1092,8 @@ class CylinderApp(QtWidgets.QMainWindow):
                 always_visible=True, shape_opacity=0.4
             )
 
+        self.plotter.suppress_rendering = False
+
         self.update_visibility()
         self.update_opacity()
 
@@ -1116,9 +1126,7 @@ class CylinderApp(QtWidgets.QMainWindow):
             print("\n=== SCAN EXPORT ===\nNo active cylinders.\n")
             return
 
-        if self.chk_flip_x.isChecked(): pts[:,0] = self.max_dims[0]-pts[:,0]
-        if self.chk_flip_y.isChecked(): pts[:,1] = self.max_dims[1]-pts[:,1]
-        if self.chk_flip_z.isChecked(): pts[:,2] = self.max_dims[2]-pts[:,2]
+        pts = self.apply_output_flips(pts)
 
         print("\n=== SCAN EXPORT ===")
         print(f"Total Active (Auto + Manual): {len(pts)}")

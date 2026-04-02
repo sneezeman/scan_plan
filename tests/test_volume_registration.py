@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation as R
 from scan_plan.volume_registration import VolumeRegistration
 
 
@@ -137,3 +138,166 @@ class TestFitTransformation:
         # Both should have very low error for identity-like transform
         assert np.mean(res_svd.distances) < 1.0
         assert np.mean(res_opt.distances) < 1.0
+
+    # ---- New tests: non-trivial transforms ----
+
+    def _make_rotated_points(self, rotation, n_points=8, rng=None):
+        """Generate random prescan points and apply a rotation to create refscan points.
+
+        Returns (prescan_list, refscan_list) as lists of tuples, ready for addMatchPoint.
+        The rotation is applied about the centroid so that centering in the
+        fitting routine recovers the correct rotation.
+        """
+        if rng is None:
+            rng = np.random.default_rng(42)
+        prescan = rng.uniform(200, 1800, size=(n_points, 3))
+        refscan = rotation.apply(prescan)
+        prescan_tuples = [tuple(row) for row in prescan]
+        refscan_tuples = [tuple(row) for row in refscan]
+        return prescan_tuples, refscan_tuples
+
+    def test_svd_known_z_rotation(self):
+        """SVD should recover a known 45-degree Z rotation to within 0.1 degrees."""
+        angle_deg = 45.0
+        rotation = R.from_euler('xyz', [0, 0, angle_deg], degrees=True)
+        rng = np.random.default_rng(42)
+
+        vreg = _make_vreg()
+        prescan_pts, refscan_pts = self._make_rotated_points(rotation, n_points=8, rng=rng)
+        for p, r in zip(prescan_pts, refscan_pts):
+            vreg.addMatchPoint(p, r, 0)
+
+        result = vreg.fitTransformationMatrix(rot_z_only=True, method='svd')
+
+        # rotation_angles is [yaw, pitch, roll]; for rot_z_only, roll is the Z angle
+        recovered_angle = result.rotation_angles[2]
+        np.testing.assert_allclose(recovered_angle, angle_deg, atol=0.1,
+                                   err_msg=f"SVD recovered {recovered_angle}, expected {angle_deg}")
+        # Residuals should be near-zero for perfect data
+        assert np.max(result.distances) < 1.0
+
+    def test_optimizer_known_z_rotation(self):
+        """Optimizer should recover a known 45-degree Z rotation to within 0.5 degrees."""
+        angle_deg = 45.0
+        rotation = R.from_euler('xyz', [0, 0, angle_deg], degrees=True)
+        rng = np.random.default_rng(42)
+
+        vreg = _make_vreg()
+        prescan_pts, refscan_pts = self._make_rotated_points(rotation, n_points=8, rng=rng)
+        for p, r in zip(prescan_pts, refscan_pts):
+            vreg.addMatchPoint(p, r, 0)
+
+        result = vreg.fitTransformationMatrix(rot_z_only=True, method='optimizer')
+
+        recovered_angle = result.rotation_angles[2]
+        np.testing.assert_allclose(recovered_angle, angle_deg, atol=0.5,
+                                   err_msg=f"Optimizer recovered {recovered_angle}, expected {angle_deg}")
+        assert np.max(result.distances) < 1.0
+
+    def test_svd_x_flip_detection(self):
+        """SVD should detect an X-flip and report low residual."""
+        rng = np.random.default_rng(42)
+
+        vreg = _make_vreg()
+        prescan = rng.uniform(200, 1800, size=(8, 3))
+        refscan = prescan.copy()
+        refscan[:, 0] = -refscan[:, 0]  # flip X axis
+
+        for i in range(len(prescan)):
+            vreg.addMatchPoint(tuple(prescan[i]), tuple(refscan[i]), 0)
+
+        result = vreg.fitTransformationMatrix(rot_z_only=True, method='svd')
+
+        # Total residual should be low (X-flip is a clean transform)
+        assert np.sum(result.distances) < 1.0, (
+            f"Total residual {np.sum(result.distances)} too high for X-flip"
+        )
+        # Solution message should indicate X-flip was detected
+        assert "X-flip" in result.solution.message, (
+            f"Expected 'X-flip' in solution message, got: {result.solution.message}"
+        )
+
+    def test_optimizer_x_flip_detection(self):
+        """Optimizer should detect an X-flip and report low residual."""
+        rng = np.random.default_rng(42)
+
+        vreg = _make_vreg()
+        prescan = rng.uniform(200, 1800, size=(8, 3))
+        refscan = prescan.copy()
+        refscan[:, 0] = -refscan[:, 0]  # flip X axis
+
+        for i in range(len(prescan)):
+            vreg.addMatchPoint(tuple(prescan[i]), tuple(refscan[i]), 0)
+
+        result = vreg.fitTransformationMatrix(rot_z_only=True, method='optimizer')
+
+        assert np.sum(result.distances) < 1.0, (
+            f"Total residual {np.sum(result.distances)} too high for X-flip"
+        )
+        assert "X-flip" in result.solution.message, (
+            f"Expected 'X-flip' in solution message, got: {result.solution.message}"
+        )
+
+    def test_svd_full_3d_rotation(self):
+        """SVD with rot_z_only=False should recover a full 3D rotation."""
+        angles_deg = [10.0, 20.0, 30.0]  # yaw, pitch, roll
+        rotation = R.from_euler('xyz', angles_deg, degrees=True)
+        rng = np.random.default_rng(42)
+
+        vreg = _make_vreg()
+        prescan_pts, refscan_pts = self._make_rotated_points(rotation, n_points=10, rng=rng)
+        for p, r in zip(prescan_pts, refscan_pts):
+            vreg.addMatchPoint(p, r, 0)
+
+        result = vreg.fitTransformationMatrix(rot_z_only=False, method='svd')
+
+        # Check each angle is recovered approximately
+        for i, (recovered, expected) in enumerate(zip(result.rotation_angles, angles_deg)):
+            np.testing.assert_allclose(
+                recovered, expected, atol=0.5,
+                err_msg=f"Angle {i} (xyz): recovered {recovered}, expected {expected}"
+            )
+        # Residuals should be near-zero for perfect data
+        assert np.max(result.distances) < 1.0
+
+    def test_noisy_registration(self):
+        """Both SVD and optimizer should tolerate moderate noise and still recover angles."""
+        angle_deg = 30.0
+        rotation = R.from_euler('xyz', [0, 0, angle_deg], degrees=True)
+        rng = np.random.default_rng(42)
+        noise_sigma = 2.0  # pixels
+
+        n_points = 20  # more points to average out noise
+        prescan = rng.uniform(200, 1800, size=(n_points, 3))
+        refscan_clean = rotation.apply(prescan)
+        refscan_noisy = refscan_clean + rng.normal(0, noise_sigma, size=refscan_clean.shape)
+
+        for method in ('svd', 'optimizer'):
+            vreg = _make_vreg()
+            for i in range(n_points):
+                vreg.addMatchPoint(tuple(prescan[i]), tuple(refscan_noisy[i]), 0)
+
+            result = vreg.fitTransformationMatrix(rot_z_only=True, method=method)
+            recovered_angle = result.rotation_angles[2]
+
+            np.testing.assert_allclose(
+                recovered_angle, angle_deg, atol=5.0,
+                err_msg=f"{method}: recovered {recovered_angle}, expected ~{angle_deg} (noise sigma={noise_sigma})"
+            )
+            # Mean residual should be reasonable (same order as noise)
+            assert np.mean(result.distances) < 10.0, (
+                f"{method}: mean residual {np.mean(result.distances)} unreasonably large"
+            )
+
+    def test_minimum_points_raises(self):
+        """Calling fitTransformationMatrix with fewer than 2 points should raise ValueError."""
+        # Zero points
+        vreg0 = _make_vreg()
+        with pytest.raises(ValueError):
+            vreg0.fitTransformationMatrix(rot_z_only=True, method='svd')
+
+        # One point
+        vreg1 = _make_vreg()
+        vreg1.addMatchPoint((500, 500, 500), (500, 500, 500), 0)
+        with pytest.raises(ValueError):
+            vreg1.fitTransformationMatrix(rot_z_only=True, method='svd')
