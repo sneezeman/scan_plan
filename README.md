@@ -1,12 +1,14 @@
 <img width="300" height="150" alt="Gemini_Generated_Image_upewhiupewhiupew" src="https://github.com/user-attachments/assets/99eb6095-e09c-4395-9b50-4071c6e2aedb" />
 
+**Python 3.10+ | scipy 1.15+ | PyQt5**
+
 GUI for planning a scanning strategy in high-resolution tomography.
 
 Plan cylindrical scan regions within a 3D prescan volume, pack them efficiently using bounding-box ROIs, and register coordinates between prescan and machine reference frames using dual SVD/Optimizer transformation models.
 
 ## Installation
 
-Requires Python >= 3.10 and scipy >= 1.13 (for `scipy.spatial.transform.RigidTransform`).
+Requires Python >= 3.10 and scipy >= 1.15 (for `scipy.spatial.transform.RigidTransform`).
 
 Recommended setup with conda:
 
@@ -47,7 +49,9 @@ One can use an ID16A overview tomogram/fasttomo as the prescan volume instead of
    - Optionally pre-define `rois` in the config, or load them at runtime
 2. Launch the GUI:
    ```bash
-   scan-plan my_config.json
+   scan-plan                         # uses ./scan_plan_config.json
+   scan-plan my_config.json          # explicit config path
+   scan-plan my_config.json --debug  # verbose logging
    ```
 
 ### 3. Adjust cylinder grid
@@ -66,12 +70,18 @@ One can use an ID16A overview tomogram/fasttomo as the prescan volume instead of
    - Or enter values manually in the tables
 3. Set the machine reference parameters (su, sv, sz, pixel sizes)
 4. Click **Calculate & Verify Models** to fit both SVD and Optimizer models
-5. Review per-point errors in the Results tab
+5. Review per-point errors in the Results tab — both models automatically
+   test for X-flip (mirrored axis) and select the best variant. If match
+   points are nearly collinear, a warning is displayed about poorly
+   constrained rotation.
 6. Click **SAVE MACHINE COORDINATES** to export all output files
 
 ## Configuration
 
-The JSON config file controls volume loading and scan parameters. See `scan_plan_config.example.json` for a full template. If the config file does not exist, a default example is auto-generated.
+The JSON config file controls volume loading and scan parameters. If the
+config file does not exist at the specified path, a default is auto-generated.
+See [`scan_plan_config.example.json`](scan_plan_config.example.json) for a
+full annotated template.
 
 ### Core Settings
 
@@ -86,6 +96,14 @@ The JSON config file controls volume loading and scan parameters. See `scan_plan
 | `prescan_z_step`       | number   | Prescan Z step size in nm                |
 | `scan_pixel_size`      | number   | Target scan pixel size in nm             |
 | `rois`                 | array    | Pre-defined ROI bounding boxes           |
+
+### Instrument Defaults
+
+Optics parameters (`beam_pitch_rad`, `optics_pixel_size_um`, `z12`, `sx0_mm`,
+`rotation_offset_deg`) and motor travel limits (`su`, `sv`, `sz`) are bundled
+in `instrument_defaults.json` inside the package. These are ID16A-specific
+constants and are not included in the user config file. They are merged
+automatically at startup; user config values take precedence if present.
 
 ## Motor Coordinate Registration
 
@@ -110,13 +128,14 @@ Additionally, the main window **EXPORT NML (TILES)** button exports two NML file
 pip install -e ".[test]"   # install with test dependencies (pytest, etc.)
 pytest
 ```
+
 ## Features
 
 - 3D volume rendering with adjustable blending modes (Composite, MIP, MinIP, Average)
 - Automatic cylinder grid generation with three fill modes: Strict, Center, Coverage
 - Manual cylinder placement with bulk paste support
 - ROI management from WebKnossos NML files or manual entry
-- Dual coordinate registration (SVD Kabsch + SciPy Optimizer) with per-point error analysis
+- Dual coordinate registration (SVD Kabsch + SciPy Optimizer) with per-point error analysis, automatic X-flip detection, and near-collinear point warnings
 - Motor coordinate registration mode — match prescan pixels directly against su/sv/sz motor positions without a refscan
 - NML export for standard and expanded bounding boxes
 - Machine coordinate export with motor positions, Fiji-compatible coordinates, and WebKnossos NML bounding boxes
