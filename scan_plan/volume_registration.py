@@ -196,18 +196,20 @@ class VolumeRegistration():
             sol.message = f"SVD (Kabsch) Exact Mathematical Solution{svd_note}"
             
         else:
-            # --- SciPy Optimizer (proper rotation only, no flip) ---
-            self.__x_flip = False
+            # --- SciPy Optimizer ---
+            # Try both normal and X-flipped data, keep the better result.
+            F_x = np.diag([-1, 1, 1])
+
             def getTransformedCoordinates(coords, yaw, pitch, roll, tx, ty, tz):
                 Tf_A_B = self._getTransformation(yaw, pitch, roll, tx, ty, tz)
                 return Tf_A_B.apply(coords)
-            
+
             def getQuality(X, refscan_coords, prescan_coords):
                 tx, ty, tz = 0, 0, 0
                 yaw, pitch, roll = X
                 transformed = getTransformedCoordinates(prescan_coords, yaw, pitch, roll, tx, ty, tz)
                 return np.sum(np.sum((refscan_coords - transformed)**2, axis=1)**0.5)
-            
+
             def getQualityYaw(X, refscan_coords, prescan_coords):
                 tx, ty, tz = 0, 0, 0
                 yaw = 0
@@ -216,18 +218,32 @@ class VolumeRegistration():
                 transformed = getTransformedCoordinates(prescan_coords, yaw, pitch, roll, tx, ty, tz)
                 return np.sum(np.sum((refscan_coords - transformed)**2, axis=1)**0.5)
 
+            P_flip = P @ F_x
+
             if rot_z_only:
                 x0 = [0,]
                 steps = [90,]
                 initial_simplex = np.vstack([x0] + [x0 + np.eye(len(x0))[i] * steps[i] for i in range(len(x0))])
-                sol = opt.minimize(getQualityYaw, x0, (Q, P), 'Nelder-Mead', options={'initial_simplex': initial_simplex})
-                self.__transformationMatrix = self._getTransformation(0, 0, sol.x[0], 0, 0, 0)
-                final_angles = [0, 0, sol.x[0]]
+                sol      = opt.minimize(getQualityYaw, x0, (Q, P),      'Nelder-Mead', options={'initial_simplex': initial_simplex})
+                sol_flip = opt.minimize(getQualityYaw, x0, (Q, P_flip), 'Nelder-Mead', options={'initial_simplex': initial_simplex})
             else:
                 x0 = [0,0,0]
                 steps = [90,90,90]
                 initial_simplex = np.vstack([x0] + [x0 + np.eye(len(x0))[i] * steps[i] for i in range(len(x0))])
-                sol = opt.minimize(getQuality, x0, (Q, P), 'Nelder-Mead', options={'initial_simplex': initial_simplex})
+                sol      = opt.minimize(getQuality, x0, (Q, P),      'Nelder-Mead', options={'initial_simplex': initial_simplex})
+                sol_flip = opt.minimize(getQuality, x0, (Q, P_flip), 'Nelder-Mead', options={'initial_simplex': initial_simplex})
+
+            if sol_flip.fun < sol.fun:
+                sol = sol_flip
+                self.__x_flip = True
+                sol.message = sol.message + " (with X-flip)"
+            else:
+                self.__x_flip = False
+
+            if rot_z_only:
+                self.__transformationMatrix = self._getTransformation(0, 0, sol.x[0], 0, 0, 0)
+                final_angles = [0, 0, sol.x[0]]
+            else:
                 self.__transformationMatrix = self._getTransformation(*sol.x, 0, 0, 0)
                 final_angles = list(sol.x)
         
