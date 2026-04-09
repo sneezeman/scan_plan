@@ -1,0 +1,26 @@
+#%Module1.0
+##
+## scan_plan - Cylinder Packing Strategy GUI for high-resolution tomography
+##
+
+proc ModulesHelp { } {
+    puts stderr "scan_plan v5.1.0 - Plan cylindrical scan regions in synchrotron tomography"
+    puts stderr ""
+    puts stderr "Usage:  scan-plan [config.json] [--debug]"
+    puts stderr ""
+    puts stderr "The source code is mounted from CVMFS. To update:"
+    puts stderr "  Contact ID16A staff or update via the CVMFS publisher."
+}
+
+module-whatis "scan_plan v5.1.0 - Cylinder Packing GUI for ID16A tomography"
+
+# Paths on CVMFS — adjust repository name as needed
+set basedir /cvmfs/hpc.esrf.fr/software/packages/linux/x86_64/scan_plan/5.1.0
+set sif     $basedir/scan_plan.sif
+set src     $basedir/src
+
+# Wrapper function: runs scan-plan inside the Apptainer container
+# Binds user home + common ESRF data paths for volume access
+set wrapper "apptainer exec --bind ${src}:/opt/scan_plan,\$HOME:\$HOME,/tmp:/tmp --env PYTHONPATH=/opt/scan_plan ${sif} python3.13 -m scan_plan.cli"
+
+set-function scan-plan "${wrapper} \"\$@\""

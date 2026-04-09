@@ -1,0 +1,83 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Author Artem (ID16A, ESRF)
+    Description scan_plan - Cylinder Packing Strategy GUI for high-resolution tomography
+    Version 5.1.0
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    # System libraries needed by Qt5, VTK/Mesa, and X11
+    apt-get -y update && apt-get -y install --no-install-recommends \
+        software-properties-common \
+        git \
+        curl \
+        wget \
+        ca-certificates \
+        libgl1 \
+        libegl1 \
+        libgles2 \
+        libglx-mesa0 \
+        libxrender1 \
+        libxkbcommon-x11-0 \
+        libxcb-xinerama0 \
+        libxcb-icccm4 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-randr0 \
+        libxcb-render-util0 \
+        libxcb-shape0 \
+        libxcb-cursor0 \
+        libxcb-xfixes0 \
+        libfontconfig1 \
+        libdbus-1-3 \
+        libglib2.0-0 \
+        libx11-xcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxi6 \
+        libxtst6 \
+        libxrandr2 \
+        && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    # Install Miniforge (conda) for reliable Python 3.13
+    curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
+        -o /tmp/miniforge.sh
+    bash /tmp/miniforge.sh -b -p /opt/conda
+    rm /tmp/miniforge.sh
+
+    # Create scan_plan environment
+    /opt/conda/bin/conda create -n scan_plan python=3.13 -y
+    /opt/conda/envs/scan_plan/bin/pip install --no-cache-dir \
+        numpy \
+        tifffile \
+        pyvista \
+        pyvistaqt \
+        pandas \
+        "scipy>=1.15" \
+        PyQt5 \
+        pint \
+        pytest
+
+    # Clean conda caches to reduce image size
+    /opt/conda/bin/conda clean -afy
+
+%environment
+    export PATH=/opt/conda/envs/scan_plan/bin:/opt/conda/bin:$PATH
+    export CONDA_DEFAULT_ENV=scan_plan
+    export CONDA_PREFIX=/opt/conda/envs/scan_plan
+
+    # Qt/VTK rendering via X11 (NICE/NoMachine on the cluster)
+    export QT_QPA_PLATFORM=xcb
+    export PYVISTA_OFF_SCREEN=false
+
+%runscript
+    exec python -m scan_plan.cli "$@"
+
+%test
+    export PATH=/opt/conda/envs/scan_plan/bin:$PATH
+    python -c "import numpy; import scipy; import pyvista; import PyQt5; print('All imports OK')"
+    python -c "from scipy.spatial.transform import RigidTransform; print('RigidTransform available')"
+    python -c "import scipy; assert tuple(int(x) for x in scipy.__version__.split('.')[:2]) >= (1,15), 'scipy too old'"
