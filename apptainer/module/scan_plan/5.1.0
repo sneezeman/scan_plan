@@ -14,13 +14,11 @@ proc ModulesHelp { } {
 
 module-whatis "scan_plan v5.1.0 - Cylinder Packing GUI for ID16A tomography"
 
-# Paths on CVMFS — adjust repository name as needed
+# Paths on CVMFS
 set basedir /cvmfs/hpc.esrf.fr/software/packages/linux/x86_64/scan_plan/5.1.0
 set sif     $basedir/scan_plan.sif
 set src     $basedir/src
 
-# Wrapper function: runs scan-plan inside the Apptainer container
-# Binds user home + common ESRF data paths for volume access
-set wrapper "apptainer exec --bind ${src}:/opt/scan_plan,\$HOME:\$HOME,/tmp:/tmp --env PYTHONPATH=/opt/scan_plan ${sif} python3.13 -m scan_plan.cli"
-
-set-function scan-plan "${wrapper} \"\$@\""
+# Wrapper: runs scan-plan inside the Apptainer container
+# Binds source code, user home, and /tmp for Qt
+set-alias scan-plan "apptainer exec --bind ${src}:/opt/scan_plan,\$HOME:\$HOME,/tmp:/tmp --env PYTHONPATH=/opt/scan_plan ${sif} python -m scan_plan.cli"

@@ -30,3 +30,6 @@ env/
 .venv/
 *.egg-info/
 .pytest_cache/
+
+# Apptainer images
+*.sif
