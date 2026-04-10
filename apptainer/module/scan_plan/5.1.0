@@ -8,8 +8,8 @@ proc ModulesHelp { } {
     puts stderr ""
     puts stderr "Usage:  scan-plan [config.json] [--debug]"
     puts stderr ""
-    puts stderr "Source code is at /data/id16a/software/scan_plan (git-managed)."
-    puts stderr "To update: cd /data/id16a/software/scan_plan && git pull"
+    puts stderr "Source code is at /data/id16a/inhouse1/sware/Python/scan_plan (git-managed)."
+    puts stderr "To update: cd /data/id16a/inhouse1/sware/Python/scan_plan && git pull"
 }
 
 module-whatis "scan_plan v5.1.0 - Cylinder Packing GUI for ID16A tomography"
@@ -18,7 +18,7 @@ module-whatis "scan_plan v5.1.0 - Cylinder Packing GUI for ID16A tomography"
 set sif /cvmfs/hpc.esrf.fr/software/packages/linux/x86_64/scan_plan/5.1.0/scan_plan.sif
 
 # Source code on shared beamline storage (git-managed, updatable with git pull)
-set src /data/id16a/software/scan_plan
+set src /data/id16a/inhouse1/sware/Python/scan_plan
 
 # Wrapper: runs scan-plan inside the Apptainer container
 set-alias scan-plan "apptainer exec --bind ${src}:/opt/scan_plan,\$HOME:\$HOME,/tmp:/tmp --env PYTHONPATH=/opt/scan_plan ${sif} python -m scan_plan.cli"
