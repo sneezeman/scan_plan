@@ -50,6 +50,31 @@ class TestLoadConfig:
         cfg = load_config(str(cfg_path))
         assert cfg["binning"] == 1  # default
 
+    def test_copies_instrument_defaults_next_to_config(self, tmp_path):
+        """instrument_defaults.json should be copied to the config's dir on first run."""
+        cfg_path = tmp_path / "new_config.json"
+        instrument_path = tmp_path / "instrument_defaults.json"
+        assert not instrument_path.exists()
+        cfg = load_config(str(cfg_path))
+        assert instrument_path.exists(), "instrument_defaults.json was not copied"
+        # Values from instrument_defaults.json should be merged into the config
+        assert "optics" in cfg
+        assert "motor_limits" in cfg
+
+    def test_user_edits_to_instrument_defaults_are_respected(self, tmp_path):
+        """Editing the working-dir instrument_defaults.json should override bundled values."""
+        cfg_path = tmp_path / "cfg.json"
+        instrument_path = tmp_path / "instrument_defaults.json"
+        # First run creates the copy
+        load_config(str(cfg_path))
+        # Edit the local copy
+        edited = {"optics": {"rotation_offset_deg": -99.9}, "motor_limits": {"su": [-1.0, 1.0]}}
+        instrument_path.write_text(json.dumps(edited))
+        # Second run should pick up edited values
+        cfg = load_config(str(cfg_path))
+        assert cfg["optics"]["rotation_offset_deg"] == -99.9
+        assert cfg["motor_limits"]["su"] == [-1.0, 1.0]
+
 
 class TestLoadVolume:
     def test_missing_file_raises(self):

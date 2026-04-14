@@ -102,8 +102,13 @@ full annotated template.
 Optics parameters (`beam_pitch_rad`, `optics_pixel_size_um`, `z12`, `sx0_mm`,
 `rotation_offset_deg`) and motor travel limits (`su`, `sv`, `sz`) are bundled
 in `instrument_defaults.json` inside the package. These are ID16A-specific
-constants and are not included in the user config file. They are merged
-automatically at startup; user config values take precedence if present.
+constants and are not included in the user config file.
+
+On first run, `instrument_defaults.json` is copied next to your config file
+(in the working directory) so you can tweak per-session values without
+touching the package. Delete the local copy to regenerate a fresh one from
+the package defaults. Values are merged into the config at startup; user
+config values take precedence if present.
 
 ## Motor Coordinate Registration
 

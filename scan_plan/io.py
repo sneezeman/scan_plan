@@ -4,6 +4,7 @@ I/O helpers: config loading, volume loading, NML parsing, TIFF dimension detecti
 
 import os
 import json
+import shutil
 import logging
 import xml.etree.ElementTree as ET
 
@@ -94,9 +95,31 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         return None, None
 
 
-def _load_instrument_defaults():
-    """Load instrument defaults (optics, motor limits) from bundled JSON."""
-    path = os.path.join(os.path.dirname(__file__), 'instrument_defaults.json')
+def _load_instrument_defaults(target_dir=None):
+    """Load instrument defaults (optics, motor limits).
+
+    If *target_dir* is given, the bundled JSON is copied there (if not
+    already present) and loaded from the copy. This lets users tweak
+    per-session instrument parameters without touching the package —
+    edits persist across runs but the user can always delete the copy
+    to regenerate a fresh one from the package defaults.
+    """
+    bundled = os.path.join(os.path.dirname(__file__), 'instrument_defaults.json')
+
+    if target_dir is not None:
+        user_copy = os.path.join(target_dir, 'instrument_defaults.json')
+        if not os.path.exists(user_copy):
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+                shutil.copy(bundled, user_copy)
+                logger.info("Copied instrument_defaults.json to %s", user_copy)
+            except (OSError, PermissionError) as e:
+                logger.warning("Could not copy instrument_defaults.json to %s: %s — using bundled version", target_dir, e)
+                user_copy = bundled
+        path = user_copy
+    else:
+        path = bundled
+
     with open(path, 'r') as f:
         return json.load(f)
 
@@ -147,8 +170,10 @@ def load_config(filepath):
                 logger.error("Failed to parse config JSON: %s", e)
                 cfg = default_config
 
-    # Merge instrument defaults — user config values take precedence
-    instrument = _load_instrument_defaults()
+    # Copy instrument_defaults.json next to the user's config file
+    # (created on first run; user can edit it to tweak per-session values).
+    target_dir = os.path.dirname(os.path.abspath(filepath))
+    instrument = _load_instrument_defaults(target_dir)
     cfg = _deep_merge(instrument, cfg)
 
     return cfg
