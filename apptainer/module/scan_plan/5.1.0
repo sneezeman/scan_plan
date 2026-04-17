@@ -21,4 +21,5 @@ set sif /cvmfs/hpc.esrf.fr/software/packages/linux/x86_64/scan_plan/5.1.0/scan_p
 set src /data/id16a/inhouse1/sware/Python/scan_plan
 
 # Wrapper: runs scan-plan inside the Apptainer container
-set-alias scan-plan "apptainer exec --bind ${src}:/opt/scan_plan,\$HOME:\$HOME,/tmp:/tmp --env PYTHONPATH=/opt/scan_plan ${sif} python -m scan_plan.cli"
+# --writable-tmpfs: allows runtime fix for D-Bus machine-id
+set-alias scan-plan "mkdir -p /tmp/run_user_\$(id -u) && apptainer exec --writable-tmpfs --bind ${src}:/opt/scan_plan,\$HOME:\$HOME,/tmp:/tmp,/tmp/run_user_\$(id -u):/run/user/\$(id -u) --env PYTHONPATH=/opt/scan_plan ${sif} bash -c 'cat /proc/sys/kernel/random/uuid | tr -d \"-\" > /etc/machine-id && mkdir -p /var/lib/dbus && cp /etc/machine-id /var/lib/dbus/machine-id && python -m scan_plan.cli \"\$@\"' _"

@@ -9,13 +9,14 @@ From: ubuntu:24.04
 %post
     export DEBIAN_FRONTEND=noninteractive
 
+    apt-get -y update
+
     # System libraries needed by Qt5, VTK/Mesa, and X11
-    apt-get -y update && apt-get -y install --no-install-recommends \
-        software-properties-common \
-        git \
-        curl \
-        wget \
+    apt-get -y install --no-install-recommends \
         ca-certificates \
+        python3 \
+        python3-pip \
+        python-is-python3 \
         libgl1 \
         libegl1 \
         libgles2 \
@@ -39,18 +40,11 @@ From: ubuntu:24.04
         libxdamage1 \
         libxi6 \
         libxtst6 \
-        libxrandr2 \
-        && apt-get clean && rm -rf /var/lib/apt/lists/*
+        libxrandr2
 
-    # Install Miniforge (conda) for reliable Python 3.13
-    curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
-        -o /tmp/miniforge.sh
-    bash /tmp/miniforge.sh -b -p /opt/conda
-    rm /tmp/miniforge.sh
-
-    # Create scan_plan environment
-    /opt/conda/bin/conda create -n scan_plan python=3.13 -y
-    /opt/conda/envs/scan_plan/bin/pip install --no-cache-dir \
+    # Install Python dependencies system-wide
+    # --break-system-packages is needed on Ubuntu 24.04 (PEP 668)
+    pip install --no-cache-dir --break-system-packages \
         numpy \
         tifffile \
         pyvista \
@@ -61,23 +55,25 @@ From: ubuntu:24.04
         pint \
         pytest
 
-    # Clean conda caches to reduce image size
-    /opt/conda/bin/conda clean -afy
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    # D-Bus needs a machine-id; generate one at build time
+    cat /proc/sys/kernel/random/uuid | tr -d '-' > /etc/machine-id
+    mkdir -p /var/lib/dbus
+    cp /etc/machine-id /var/lib/dbus/machine-id
 
 %environment
-    export PATH=/opt/conda/envs/scan_plan/bin:/opt/conda/bin:$PATH
-    export CONDA_DEFAULT_ENV=scan_plan
-    export CONDA_PREFIX=/opt/conda/envs/scan_plan
-
     # Qt/VTK rendering via X11 (NICE/NoMachine on the cluster)
     export QT_QPA_PLATFORM=xcb
     export PYVISTA_OFF_SCREEN=false
+    # Disable D-Bus session bus — scan_plan doesn't need it and the
+    # container may not have a valid machine-id at runtime
+    export DBUS_SESSION_BUS_ADDRESS=disabled:
 
 %runscript
     exec python -m scan_plan.cli "$@"
 
 %test
-    export PATH=/opt/conda/envs/scan_plan/bin:$PATH
     python -c "import numpy; import scipy; import pyvista; import PyQt5; print('All imports OK')"
     python -c "from scipy.spatial.transform import RigidTransform; print('RigidTransform available')"
     python -c "import scipy; assert tuple(int(x) for x in scipy.__version__.split('.')[:2]) >= (1,15), 'scipy too old'"

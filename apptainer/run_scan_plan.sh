@@ -29,19 +29,26 @@ if [ ! -f "${SIF}" ]; then
     exit 1
 fi
 
+# Create Qt runtime directory
+RUN_DIR="/tmp/run_user_$(id -u)"
+mkdir -p "${RUN_DIR}"
+
 # Bind mounts:
 #   1. The scan_plan source code → /opt/scan_plan (via PYTHONPATH)
 #   2. The user's home (for configs, data volumes, output files)
-#   3. /tmp for Qt/VTK temp files
+#   3. /tmp and Qt runtime directory
 BINDS="${SRC}:/opt/scan_plan"
 BINDS="${BINDS},${HOME}:${HOME}"
-# Bind /tmp and common ESRF data paths if they exist
-[ -d /tmp ] && BINDS="${BINDS},/tmp:/tmp"
+BINDS="${BINDS},/tmp:/tmp"
+BINDS="${BINDS},${RUN_DIR}:/run/user/$(id -u)"
+# Bind common ESRF data paths if they exist
 [ -d /data ] && BINDS="${BINDS},/data:/data"
 [ -d /visitors ] && BINDS="${BINDS},/visitors:/visitors"
 
-apptainer exec \
+# --writable-tmpfs: allows fixing /etc/machine-id at runtime
+# (Apptainer may mount an empty host machine-id over the container's)
+apptainer exec --writable-tmpfs \
     --bind "${BINDS}" \
     --env "PYTHONPATH=/opt/scan_plan" \
     "${SIF}" \
-    python -m scan_plan.cli "$@"
+    bash -c 'cat /proc/sys/kernel/random/uuid | tr -d "-" > /etc/machine-id && mkdir -p /var/lib/dbus && cp /etc/machine-id /var/lib/dbus/machine-id && python -m scan_plan.cli "$@"' _ "$@"
