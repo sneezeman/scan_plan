@@ -13,8 +13,152 @@ from pyvistaqt import QtInteractor
 
 from scan_plan.volume_registration import VolumeRegistration
 from scan_plan.nml_exporter import generate_nml
-from scan_plan.io import parse_nml
-from scan_plan.solver import solve_global_union
+from scan_plan.io import parse_nml, detect_tiff_dims
+from scan_plan.solver import solve_global_union, solve_line_coverage
+
+
+class ConfigDialog(QtWidgets.QDialog):
+    """Startup wizard for editing the scan_plan JSON config without opening the file."""
+
+    EDITABLE_KEYS = (
+        "volume_path", "binning",
+        "raw_dims", "raw_dtype", "raw_header_bytes",
+        "prescan_pixel_size_xy", "prescan_z_step", "scan_pixel_size",
+    )
+
+    def __init__(self, config, config_path, parent=None):
+        super().__init__(parent)
+        self.config = dict(config)
+        self.config_path = config_path
+        self.accepted_proceed = False
+
+        self.setWindowTitle("Scan Plan — Configuration")
+        self.resize(640, 0)
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        intro = QtWidgets.QLabel(
+            f"Edit your session settings below. Changes are saved to:\n  {config_path}"
+        )
+        intro.setStyleSheet("color: #555;")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form_box = QtWidgets.QGroupBox("Session Settings")
+        form = QtWidgets.QFormLayout()
+
+        # Volume file picker
+        h_vol = QtWidgets.QHBoxLayout()
+        self.txt_volume = QtWidgets.QLineEdit(str(config.get("volume_path", "")))
+        btn_browse = QtWidgets.QPushButton("Browse…")
+        btn_browse.clicked.connect(self._browse_volume)
+        h_vol.addWidget(self.txt_volume)
+        h_vol.addWidget(btn_browse)
+        form.addRow("Volume file:", h_vol)
+
+        self.txt_binning = QtWidgets.QLineEdit(str(config.get("binning", 1)))
+        form.addRow("Binning:", self.txt_binning)
+
+        dims = config.get("raw_dims", [2048, 2048, 2048])
+        h_dims = QtWidgets.QHBoxLayout()
+        self.txt_dim_x = QtWidgets.QLineEdit(str(dims[0]))
+        self.txt_dim_y = QtWidgets.QLineEdit(str(dims[1]))
+        self.txt_dim_z = QtWidgets.QLineEdit(str(dims[2]))
+        for lbl, w in (("X", self.txt_dim_x), ("Y", self.txt_dim_y), ("Z", self.txt_dim_z)):
+            h_dims.addWidget(QtWidgets.QLabel(lbl))
+            h_dims.addWidget(w)
+        btn_detect = QtWidgets.QPushButton("Detect TIFF")
+        btn_detect.clicked.connect(self._detect_dims)
+        h_dims.addWidget(btn_detect)
+        form.addRow("Raw dimensions:", h_dims)
+
+        self.combo_dtype = QtWidgets.QComboBox()
+        self.combo_dtype.setEditable(True)
+        for dt in ("float32", "float64", "uint8", "uint16", "uint32", "int16", "int32"):
+            self.combo_dtype.addItem(dt)
+        self.combo_dtype.setCurrentText(str(config.get("raw_dtype", "float32")))
+        form.addRow("Raw dtype:", self.combo_dtype)
+
+        self.txt_header = QtWidgets.QLineEdit(str(config.get("raw_header_bytes", 0)))
+        form.addRow("Raw header bytes:", self.txt_header)
+
+        self.txt_prescan_xy = QtWidgets.QLineEdit(str(config.get("prescan_pixel_size_xy", 180)))
+        form.addRow("Prescan pixel size XY (nm):", self.txt_prescan_xy)
+
+        self.txt_prescan_z = QtWidgets.QLineEdit(str(config.get("prescan_z_step", 180)))
+        form.addRow("Prescan Z step (nm):", self.txt_prescan_z)
+
+        self.txt_scan_px = QtWidgets.QLineEdit(str(config.get("scan_pixel_size", 20)))
+        form.addRow("Scan pixel size (nm):", self.txt_scan_px)
+
+        form_box.setLayout(form)
+        layout.addWidget(form_box)
+
+        btns = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        btns.button(QtWidgets.QDialogButtonBox.Ok).setText("Save && Continue")
+        btns.button(QtWidgets.QDialogButtonBox.Cancel).setText("Cancel")
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _browse_volume(self):
+        start_dir = ""
+        cur = self.txt_volume.text().strip()
+        if cur:
+            cand_dir = os.path.dirname(cur)
+            if os.path.isdir(cand_dir):
+                start_dir = cand_dir
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select Volume",
+            start_dir,
+            "Volumes (*.tif *.tiff *.raw *.vol);;All files (*)"
+        )
+        if path:
+            self.txt_volume.setText(path)
+            self._detect_dims(path)
+
+    def _detect_dims(self, path=None):
+        if not isinstance(path, str) or not path:
+            path = self.txt_volume.text().strip()
+        if not path or not os.path.exists(path):
+            return
+        det = detect_tiff_dims(path)
+        if det is None:
+            return
+        new_dims, new_dtype = det
+        self.txt_dim_x.setText(str(new_dims[0]))
+        self.txt_dim_y.setText(str(new_dims[1]))
+        self.txt_dim_z.setText(str(new_dims[2]))
+        self.combo_dtype.setCurrentText(str(new_dtype))
+
+    def _on_accept(self):
+        try:
+            updates = {
+                "volume_path": self.txt_volume.text().strip(),
+                "binning": int(self.txt_binning.text()),
+                "raw_dims": [
+                    int(self.txt_dim_x.text()),
+                    int(self.txt_dim_y.text()),
+                    int(self.txt_dim_z.text()),
+                ],
+                "raw_dtype": self.combo_dtype.currentText().strip(),
+                "raw_header_bytes": int(self.txt_header.text()),
+                "prescan_pixel_size_xy": float(self.txt_prescan_xy.text()),
+                "prescan_z_step": float(self.txt_prescan_z.text()),
+                "scan_pixel_size": float(self.txt_scan_px.text()),
+            }
+        except ValueError as e:
+            QtWidgets.QMessageBox.warning(self, "Invalid input",
+                                          f"Numeric field could not be parsed:\n{e}")
+            return
+        self.config.update(updates)
+        self.accepted_proceed = True
+        self.accept()
+
+    def get_updates(self):
+        return {k: self.config[k] for k in self.EDITABLE_KEYS if k in self.config}
 
 
 class RegistrationDialog(QtWidgets.QDialog):
@@ -397,8 +541,8 @@ class RegistrationDialog(QtWidgets.QDialog):
             self.combo_result_select.addItem(f"SVD (Kabsch) - Avg: {err_svd:.2f} \u00b5m, Max: {max_svd:.2f} \u00b5m ({n_pts} pts)")
             self.combo_result_select.addItem(f"Optimizer - Avg: {err_opt:.2f} \u00b5m, Max: {max_opt:.2f} \u00b5m ({n_pts} pts)")
 
-            best_idx = 0 if err_svd <= err_opt else 1
-            self.combo_result_select.setCurrentIndex(best_idx)
+            # Math (SVD/Kabsch) is the default; user can switch to Optimizer manually.
+            self.combo_result_select.setCurrentIndex(0)
             self.combo_result_select.blockSignals(False)
 
             self.lbl_result.setText("Status: Fit Complete. Check Results Tab.")
@@ -541,19 +685,25 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         self.all_points = np.empty((0,3))
         self.manual_points = []
+        self.lines = []           # list of (p1, p2) tuples in prescan-pixel coords
+        self.line_points = np.empty((0,3))
 
         self.dims_std = (10,10)
         self.dims_exp = (10,10)
         self.active_mask = []
         self.active_manual_mask = []
+        self.active_line_mask = []
         self.total_roi_shift = [0, 0, 0]
         self.current_scan_res = config['scan_pixel_size']
 
         self.roi_actors = []
+        self.line_actors = []
         self.actor_std = None
         self.actor_exp = None
         self.actor_man = None
         self.actor_man_exp = None
+        self.actor_line = None
+        self.actor_line_exp = None
         self.vol_actor = None
         self.actor_labels = None
 
@@ -586,6 +736,7 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         layout.addWidget(self._create_appearance_group())
         layout.addWidget(self._create_roi_group())
+        layout.addWidget(self._make_collapsible("Line Coverage", self._create_line_content()))
         layout.addWidget(self._create_config_group())
         layout.addWidget(self._make_collapsible("Shift Bounding Boxes", self._create_roi_shift_content()))
         layout.addWidget(self._create_auto_grid_group())
@@ -766,6 +917,110 @@ class CylinderApp(QtWidgets.QMainWindow):
         grp.setLayout(lo)
         return grp
 
+    def _create_line_content(self):
+        widget = QtWidgets.QWidget()
+        lo = QtWidgets.QVBoxLayout(widget)
+        lo.setContentsMargins(10, 5, 10, 5)
+        lo.setSpacing(2)
+
+        info = QtWidgets.QLabel("Define a line by two points; cylinders will tile along it without overlap.")
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #555;")
+        lo.addWidget(info)
+
+        h1 = QtWidgets.QHBoxLayout()
+        h1.addWidget(QtWidgets.QLabel("P1 (x,y,z):"))
+        self.txt_line_p1 = QtWidgets.QLineEdit()
+        self.txt_line_p1.setPlaceholderText("e.g. 100, 100, 50")
+        h1.addWidget(self.txt_line_p1)
+        lo.addLayout(h1)
+
+        h2 = QtWidgets.QHBoxLayout()
+        h2.addWidget(QtWidgets.QLabel("P2 (x,y,z):"))
+        self.txt_line_p2 = QtWidgets.QLineEdit()
+        self.txt_line_p2.setPlaceholderText("e.g. 400, 300, 50")
+        h2.addWidget(self.txt_line_p2)
+        lo.addLayout(h2)
+
+        h3 = QtWidgets.QHBoxLayout()
+        b_add = QtWidgets.QPushButton("Add Line")
+        b_add.clicked.connect(self.add_line_from_text)
+        b_clr = QtWidgets.QPushButton("Clear Inputs")
+        b_clr.clicked.connect(lambda: (self.txt_line_p1.clear(), self.txt_line_p2.clear()))
+        h3.addWidget(b_add)
+        h3.addWidget(b_clr)
+        lo.addLayout(h3)
+
+        self.chk_show_lines = QtWidgets.QCheckBox("Show Line Coverage Cylinders")
+        self.chk_show_lines.setChecked(True)
+        self.chk_show_lines.toggled.connect(self.update_3d_scene)
+        lo.addWidget(self.chk_show_lines)
+
+        self.line_list_widget = QtWidgets.QListWidget()
+        self.line_list_widget.itemChanged.connect(self.on_line_item_changed)
+        lo.addWidget(self.line_list_widget)
+
+        b_del = QtWidgets.QPushButton("Delete Selected")
+        b_del.clicked.connect(self.delete_selected_lines)
+        lo.addWidget(b_del)
+        return widget
+
+    def add_line_from_text(self):
+        try:
+            p1_parts = [float(x) for x in self.txt_line_p1.text().replace(',', ' ').split()]
+            p2_parts = [float(x) for x in self.txt_line_p2.text().replace(',', ' ').split()]
+        except ValueError:
+            self.statusBar().showMessage("Line points must be numeric: x y z", 5000)
+            return
+        if len(p1_parts) != 3 or len(p2_parts) != 3:
+            self.statusBar().showMessage("Each line point needs exactly 3 numbers (x, y, z)", 5000)
+            return
+        p1 = tuple(p1_parts)
+        p2 = tuple(p2_parts)
+        if p1 == p2:
+            self.statusBar().showMessage("P1 and P2 must differ", 5000)
+            return
+        self.lines.append((p1, p2))
+        self.active_line_mask.append(True)
+        self.txt_line_p1.clear()
+        self.txt_line_p2.clear()
+        self.refresh_line_list()
+        self.recalculate_line_points()
+
+    def delete_selected_lines(self):
+        for i in sorted([item.row() for item in self.line_list_widget.selectedIndexes()], reverse=True):
+            del self.lines[i]
+            del self.active_line_mask[i]
+        self.refresh_line_list()
+        self.recalculate_line_points()
+
+    def refresh_line_list(self):
+        self.line_list_widget.blockSignals(True)
+        self.line_list_widget.clear()
+        for i, (p1, p2) in enumerate(self.lines):
+            label = (f"Line #{i}: "
+                     f"({int(p1[0])},{int(p1[1])},{int(p1[2])}) -> "
+                     f"({int(p2[0])},{int(p2[1])},{int(p2[2])})")
+            item = QtWidgets.QListWidgetItem(label)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.Checked if self.active_line_mask[i] else QtCore.Qt.Unchecked)
+            self.line_list_widget.addItem(item)
+        self.line_list_widget.blockSignals(False)
+
+    def on_line_item_changed(self, item):
+        self.active_line_mask[self.line_list_widget.row(item)] = (item.checkState() == QtCore.Qt.Checked)
+        self.recalculate_line_points()
+
+    def recalculate_line_points(self):
+        active_lines = [ln for ln, ok in zip(self.lines, self.active_line_mask) if ok]
+        pts, dims_std, dims_exp = solve_line_coverage(active_lines, self.current_scan_res, self.cfg)
+        self.line_points = pts
+        # If there are no ROIs, line coverage drives cylinder dims.
+        if not self.rois:
+            self.dims_std = dims_std
+            self.dims_exp = dims_exp
+        self.update_3d_scene()
+
     def _create_manual_content(self):
         widget = QtWidgets.QWidget()
         lo = QtWidgets.QVBoxLayout(widget)
@@ -843,6 +1098,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         if self.vol_grid is None: return
         if self.vol_actor is not None:
             self.plotter.remove_actor(self.vol_actor)
+            self.vol_actor = None
 
         mode_str = self.combo_render.currentText()
         blend_mode = "composite"
@@ -851,7 +1107,9 @@ class CylinderApp(QtWidgets.QMainWindow):
         elif "Average" in mode_str: blend_mode = "average"
 
         self.vol_actor = self.plotter.add_volume(self.vol_grid, cmap="gray", clim=self.clim, opacity="linear", blending=blend_mode)
-        self.update_opacity()
+        # Re-add cylinder/ROI/label actors on top so the new volume actor's
+        # shader state doesn't clobber their colors.
+        self.update_3d_scene()
 
     def export_nml_tiles(self):
         pts = self.get_all_active_points()
@@ -921,6 +1179,8 @@ class CylinderApp(QtWidgets.QMainWindow):
             man_active = [p for p, a in zip(self.manual_points, self.active_manual_mask) if a]
             if len(man_active) > 0:
                 final_points.append(np.array(man_active))
+        if getattr(self, 'chk_show_lines', None) and self.chk_show_lines.isChecked() and len(self.line_points) > 0:
+            final_points.append(self.line_points)
 
         if len(final_points) == 0: return np.empty((0,3))
         return np.vstack(final_points)
@@ -1001,6 +1261,8 @@ class CylinderApp(QtWidgets.QMainWindow):
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             self.all_points, self.dims_std, self.dims_exp = solve_global_union(self.rois, self.current_scan_res, self.cfg, mode)
+            active_lines = [ln for ln, ok in zip(self.lines, self.active_line_mask) if ok]
+            self.line_points, _, _ = solve_line_coverage(active_lines, self.current_scan_res, self.cfg)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         new_count = len(self.all_points)
@@ -1060,11 +1322,23 @@ class CylinderApp(QtWidgets.QMainWindow):
         if self.actor_exp: self.plotter.remove_actor(self.actor_exp)
         if self.actor_man: self.plotter.remove_actor(self.actor_man)
         if self.actor_man_exp: self.plotter.remove_actor(self.actor_man_exp)
+        if self.actor_line: self.plotter.remove_actor(self.actor_line)
+        if self.actor_line_exp: self.plotter.remove_actor(self.actor_line_exp)
         if self.actor_labels: self.plotter.remove_actor(self.actor_labels)
+        self.actor_std = None
+        self.actor_exp = None
+        self.actor_man = None
+        self.actor_man_exp = None
+        self.actor_line = None
+        self.actor_line_exp = None
+        self.actor_labels = None
 
         for act in self.roi_actors:
             self.plotter.remove_actor(act)
         self.roi_actors.clear()
+        for act in self.line_actors:
+            self.plotter.remove_actor(act)
+        self.line_actors.clear()
 
         for r in self.rois:
             o = np.array([r['x'], r['y'], r['z']*self.z_ratio])
@@ -1074,6 +1348,18 @@ class CylinderApp(QtWidgets.QMainWindow):
             cube = pv.Cube(bounds=(o[0], o[0]+va[0], o[1], o[1]+vb[1], o[2], o[2]+vc[2]))
             act = self.plotter.add_mesh(cube, style='wireframe', color='cyan', line_width=2)
             self.roi_actors.append(act)
+
+        # Draw the user-defined line segments (always visible, like ROI wireframes)
+        for (p1, p2), active in zip(self.lines, self.active_line_mask):
+            a = np.array([p1[0], p1[1], p1[2] * self.z_ratio])
+            b = np.array([p2[0], p2[1], p2[2] * self.z_ratio])
+            line_mesh = pv.Line(a, b)
+            color = "orange" if active else "#666666"
+            act = self.plotter.add_mesh(line_mesh, color=color, line_width=3)
+            self.line_actors.append(act)
+            pts_mesh = pv.PolyData(np.vstack([a, b]))
+            act_pts = self.plotter.add_mesh(pts_mesh, color=color, point_size=10, render_points_as_spheres=True)
+            self.line_actors.append(act_pts)
 
         # Collect all label points and sequential IDs
         label_points = []
@@ -1096,6 +1382,30 @@ class CylinderApp(QtWidgets.QMainWindow):
             for pt in vp:
                 label_points.append(pt)
                 label_ids.append(str(seq))
+                seq += 1
+
+        # Line-coverage cylinders (orange) — share dims with std cylinders
+        if (getattr(self, 'chk_show_lines', None) and self.chk_show_lines.isChecked()
+                and len(self.line_points) > 0):
+            lp = self.line_points.copy()
+            lp[:, 2] *= self.z_ratio
+            d_std, h_std = self.dims_std
+            d_exp, h_exp = self.dims_exp
+            if d_std > 0 and h_std > 0:
+                c_l = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
+                                  radius=d_std/2, height=h_std*self.z_ratio)
+                self.actor_line = self.plotter.add_mesh(
+                    pv.PolyData(lp).glyph(geom=c_l, scale=False),
+                    color='orange', opacity=self.slider_cyl.value()/100)
+            if d_exp > 0 and h_exp > 0:
+                c_le = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
+                                   radius=d_exp/2, height=h_exp*self.z_ratio)
+                self.actor_line_exp = self.plotter.add_mesh(
+                    pv.PolyData(lp).glyph(geom=c_le, scale=False),
+                    color='#ff6600', opacity=self.slider_cyl.value()/100)
+            for pt in lp:
+                label_points.append(pt)
+                label_ids.append(f"L{seq}")
                 seq += 1
 
         if self.chk_show_manual.isChecked() and len(self.manual_points) > 0:
@@ -1122,7 +1432,7 @@ class CylinderApp(QtWidgets.QMainWindow):
             label_poly["labels"] = label_ids
             self.actor_labels = self.plotter.add_point_labels(
                 label_poly, "labels", font_size=12, text_color="white",
-                shadow=True, point_size=1, render_points_as_spheres=False,
+                shadow=True, show_points=False,
                 always_visible=True, shape_opacity=0.4
             )
 
@@ -1137,6 +1447,8 @@ class CylinderApp(QtWidgets.QMainWindow):
         if self.actor_exp: self.actor_exp.SetVisibility(show)
         if self.actor_man: self.actor_man.SetVisibility(not show)
         if self.actor_man_exp: self.actor_man_exp.SetVisibility(show)
+        if self.actor_line: self.actor_line.SetVisibility(not show)
+        if self.actor_line_exp: self.actor_line_exp.SetVisibility(show)
 
     def update_opacity(self):
         cyl_op = self.slider_cyl.value() / 100.0
@@ -1144,6 +1456,8 @@ class CylinderApp(QtWidgets.QMainWindow):
         if self.actor_exp: self.actor_exp.GetProperty().SetOpacity(cyl_op)
         if self.actor_man: self.actor_man.GetProperty().SetOpacity(cyl_op)
         if self.actor_man_exp: self.actor_man_exp.GetProperty().SetOpacity(cyl_op)
+        if self.actor_line: self.actor_line.GetProperty().SetOpacity(cyl_op)
+        if self.actor_line_exp: self.actor_line_exp.GetProperty().SetOpacity(cyl_op)
 
         if self.vol_actor:
             try: vol_max = float(self.txt_vol_max.text())

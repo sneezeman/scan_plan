@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pyvista")
 
 from scan_plan.io import load_volume, load_config, detect_tiff_dims
 from scan_plan.solver import calculate_contrast_limits
-from scan_plan.gui import CylinderApp
+from scan_plan.gui import CylinderApp, ConfigDialog
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,13 @@ def main():
 
     app = QtWidgets.QApplication(sys.argv)
     cfg = load_config(args.config)
+
+    # Startup wizard — replaces manual JSON editing as the primary entry point.
+    dlg = ConfigDialog(cfg, args.config)
+    if dlg.exec_() == QtWidgets.QDialog.Accepted and dlg.accepted_proceed:
+        updates = dlg.get_updates()
+        cfg.update(updates)
+        _update_user_config(args.config, updates)
 
     fp = cfg['volume_path']
     detected = detect_tiff_dims(fp)

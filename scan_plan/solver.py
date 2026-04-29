@@ -22,16 +22,22 @@ def calculate_contrast_limits(data_array, fraction=0.5):
         return [0.0, 255.0]
 
 
-def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
-    if not roi_list:
-        return np.empty((0,3)), (0,0), (0,0)
-
+def cylinder_dims(scan_res_nm, config):
+    """Return ((D_std, H_std), (D_exp, H_exp)) in prescan-pixel units."""
     size_std = scan_res_nm * 2048
     size_exp = scan_res_nm * 3216
     D_std = int(np.floor(size_std / config["prescan_pixel_size_xy"]))
     D_exp = int(np.floor(size_exp / config["prescan_pixel_size_xy"]))
     H_std = int(np.floor(size_std / config["prescan_z_step"]))
     H_exp = int(np.floor(size_exp / config["prescan_z_step"]))
+    return (D_std, H_std), (D_exp, H_exp)
+
+
+def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
+    (D_std, H_std), (D_exp, H_exp) = cylinder_dims(scan_res_nm, config)
+    if not roi_list:
+        return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
+
     R = D_std / 2.0
 
     min_x = min(r['x'] for r in roi_list)
@@ -90,3 +96,64 @@ def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
         final_points = final_points[sort_indices]
 
     return final_points, (D_std, H_std), (D_exp, H_exp)
+
+
+def solve_line_coverage(line_list, scan_res_nm, config):
+    """Distribute cylinder centers along each (P1, P2) line so adjacent
+    cylinders touch but do not overlap along the line.
+
+    Each line is a tuple (p1, p2) where p1, p2 are length-3 sequences in
+    prescan-pixel coordinates. Cylinders are anisotropic: radius R = D_std/2
+    in xy and half-height H_std/2 in z. Along a unit direction (dx,dy,dz)
+    a cylinder centered on the line covers a half-length of
+        h = min( R / sqrt(dx^2 + dy^2),  (H_std/2) / |dz| )
+    so consecutive centers are spaced by 2*h.
+
+    Returns (points, (D_std, H_std), (D_exp, H_exp)).
+    """
+    (D_std, H_std), (D_exp, H_exp) = cylinder_dims(scan_res_nm, config)
+    if not line_list or D_std <= 0 or H_std <= 0:
+        return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
+
+    R = D_std / 2.0
+    half_h_z = H_std / 2.0
+
+    out = []
+    for p1, p2 in line_list:
+        a = np.asarray(p1, dtype=float)
+        b = np.asarray(p2, dtype=float)
+        seg = b - a
+        L = np.linalg.norm(seg)
+        if L == 0:
+            out.append(a)
+            continue
+        u = seg / L
+        dx, dy, dz = u
+        radial = np.hypot(dx, dy)
+        cand = []
+        if radial > 1e-12:
+            cand.append(R / radial)
+        if abs(dz) > 1e-12:
+            cand.append(half_h_z / abs(dz))
+        half_len = min(cand) if cand else L
+        spacing = 2.0 * half_len
+        if spacing <= 0:
+            out.append(a)
+            continue
+        # Start one half-length in from p1 so the first cylinder's far edge
+        # tangents p1; tile until the far edge passes p2.
+        n = max(1, int(np.ceil((L - half_len) / spacing)) + 1)
+        # Recenter the chain so it's symmetric on the segment when possible.
+        used = (n - 1) * spacing
+        offset = (L - used) / 2.0
+        if offset < 0:
+            offset = 0.0
+        for k in range(n):
+            t = offset + k * spacing
+            out.append(a + u * t)
+
+    if not out:
+        return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
+    pts = np.array(out)
+    sort_idx = np.lexsort((pts[:, 0], pts[:, 1], pts[:, 2]))
+    return pts[sort_idx], (D_std, H_std), (D_exp, H_exp)
