@@ -687,6 +687,8 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.manual_points = []
         self.lines = []           # list of (p1, p2) tuples in prescan-pixel coords
         self.line_points = np.empty((0,3))
+        self.line_density = 1.0
+        self.active_line_cyl_mask = np.empty((0,), dtype=bool)
 
         self.dims_std = (10,10)
         self.dims_exp = (10,10)
@@ -751,6 +753,13 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.plotter.set_background("black")
         self.plotter.add_axes()
         self.plotter.show_grid()
+        # Depth peeling lets opaque/translucent geometry composite correctly
+        # over volume renderings; without it, "Average" blending tends to
+        # wash cylinder/bbox colors into the volume's grayscale.
+        try:
+            self.plotter.enable_depth_peeling(number_of_peels=8, occlusion_ratio=0.0)
+        except Exception:
+            pass
         main_layout.addWidget(self.plotter)
 
     def _make_collapsible(self, title, content_widget, collapsed=True):
@@ -899,6 +908,7 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         self.roi_list_widget = QtWidgets.QListWidget()
         self.roi_list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.roi_list_widget.itemDoubleClicked.connect(self._on_roi_double_clicked)
         self.refresh_roi_list()
         lo.addWidget(self.roi_list_widget)
 
@@ -951,6 +961,22 @@ class CylinderApp(QtWidgets.QMainWindow):
         h3.addWidget(b_clr)
         lo.addLayout(h3)
 
+        h_dens = QtWidgets.QHBoxLayout()
+        h_dens.addWidget(QtWidgets.QLabel("Density:"))
+        self.spin_line_density = QtWidgets.QDoubleSpinBox()
+        self.spin_line_density.setRange(0.1, 10.0)
+        self.spin_line_density.setSingleStep(0.1)
+        self.spin_line_density.setDecimals(2)
+        self.spin_line_density.setValue(self.line_density)
+        self.spin_line_density.setToolTip(
+            "1.0 = cylinders touching, no overlap\n"
+            ">1.0 = closer/overlapping (denser coverage)\n"
+            "<1.0 = sparser, with gaps")
+        self.spin_line_density.valueChanged.connect(self._on_line_density_changed)
+        h_dens.addWidget(self.spin_line_density)
+        h_dens.addWidget(QtWidgets.QLabel("(1.0 = touching)"))
+        lo.addLayout(h_dens)
+
         self.chk_show_lines = QtWidgets.QCheckBox("Show Line Coverage Cylinders")
         self.chk_show_lines.setChecked(True)
         self.chk_show_lines.toggled.connect(self.update_3d_scene)
@@ -958,6 +984,7 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         self.line_list_widget = QtWidgets.QListWidget()
         self.line_list_widget.itemChanged.connect(self.on_line_item_changed)
+        self.line_list_widget.itemDoubleClicked.connect(self._on_line_double_clicked)
         lo.addWidget(self.line_list_widget)
 
         b_del = QtWidgets.QPushButton("Delete Selected")
@@ -1013,13 +1040,33 @@ class CylinderApp(QtWidgets.QMainWindow):
 
     def recalculate_line_points(self):
         active_lines = [ln for ln, ok in zip(self.lines, self.active_line_mask) if ok]
-        pts, dims_std, dims_exp = solve_line_coverage(active_lines, self.current_scan_res, self.cfg)
+        pts, dims_std, dims_exp = solve_line_coverage(
+            active_lines, self.current_scan_res, self.cfg, density=self.line_density
+        )
         self.line_points = pts
+        self.active_line_cyl_mask = np.ones(len(pts), dtype=bool)
         # If there are no ROIs, line coverage drives cylinder dims.
         if not self.rois:
             self.dims_std = dims_std
             self.dims_exp = dims_exp
+        if hasattr(self, 'cyl_list_widget'):
+            self.refresh_cyl_list()
         self.update_3d_scene()
+
+    def _on_line_density_changed(self, val):
+        self.line_density = float(val)
+        self.recalculate_line_points()
+
+    def _on_line_double_clicked(self, item):
+        i = self.line_list_widget.row(item)
+        if 0 <= i < len(self.lines):
+            p1, p2 = self.lines[i]
+            self.txt_line_p1.setText(
+                f"{int(p1[0])}, {int(p1[1])}, {int(p1[2])}"
+            )
+            self.txt_line_p2.setText(
+                f"{int(p2[0])}, {int(p2[1])}, {int(p2[2])}"
+            )
 
     def _create_manual_content(self):
         widget = QtWidgets.QWidget()
@@ -1042,23 +1089,22 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         self.chk_show_manual = QtWidgets.QCheckBox("Show Manual Cylinders")
         self.chk_show_manual.setChecked(True)
-        self.chk_show_manual.toggled.connect(self.update_3d_scene)
+        self.chk_show_manual.toggled.connect(self._on_show_manual_toggled)
         lo.addWidget(self.chk_show_manual)
 
-        self.man_list_widget = QtWidgets.QListWidget()
-        self.man_list_widget.itemChanged.connect(self.on_man_item_changed)
-        lo.addWidget(self.man_list_widget)
-
-        b_del_man = QtWidgets.QPushButton("Delete Selected")
-        b_del_man.clicked.connect(self.delete_manual_points)
-        lo.addWidget(b_del_man)
+        info = QtWidgets.QLabel("Manual cylinders appear in the unified Cylinders list below.")
+        info.setStyleSheet("color: #555;")
+        info.setWordWrap(True)
+        lo.addWidget(info)
         return widget
 
     def _create_auto_grid_group(self):
-        grp = QtWidgets.QGroupBox("Generated Cylinders")
+        grp = QtWidgets.QGroupBox("Cylinders (Auto / Line / Manual)")
         lo = QtWidgets.QVBoxLayout()
+
         self.cyl_list_widget = QtWidgets.QListWidget()
-        self.cyl_list_widget.itemChanged.connect(self.on_cyl_item_changed)
+        self.cyl_list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.cyl_list_widget.itemChanged.connect(self.on_combined_item_changed)
         lo.addWidget(self.cyl_list_widget)
 
         h = QtWidgets.QHBoxLayout()
@@ -1066,8 +1112,11 @@ class CylinderApp(QtWidgets.QMainWindow):
         ba.clicked.connect(lambda: self.set_all_cyls(True))
         bn = QtWidgets.QPushButton("None")
         bn.clicked.connect(lambda: self.set_all_cyls(False))
+        b_del = QtWidgets.QPushButton("Delete Selected (Manual)")
+        b_del.clicked.connect(self.delete_selected_combined)
         h.addWidget(ba)
         h.addWidget(bn)
+        h.addWidget(b_del)
         lo.addLayout(h)
         grp.setLayout(lo)
         return grp
@@ -1136,30 +1185,17 @@ class CylinderApp(QtWidgets.QMainWindow):
                     self.manual_points.append(np.array([float(parts[0]), float(parts[1]), float(parts[2])]))
                     self.active_manual_mask.append(True)
                 except ValueError: pass
-        self.refresh_manual_list()
+        self.refresh_cyl_list()
         self.update_3d_scene()
         self.txt_man_input.clear()
 
-    def delete_manual_points(self):
-        indices = sorted([item.row() for item in self.man_list_widget.selectedIndexes()], reverse=True)
-        for i in indices:
-            del self.manual_points[i]
-            del self.active_manual_mask[i]
-        self.refresh_manual_list()
-        self.update_3d_scene()
-
     def refresh_manual_list(self):
-        self.man_list_widget.blockSignals(True)
-        self.man_list_widget.clear()
-        for i, p in enumerate(self.manual_points):
-            item = QtWidgets.QListWidgetItem(f"Man #{i}: {p.astype(int)}")
-            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
-            item.setCheckState(QtCore.Qt.Checked if self.active_manual_mask[i] else QtCore.Qt.Unchecked)
-            self.man_list_widget.addItem(item)
-        self.man_list_widget.blockSignals(False)
+        # Kept for backward-compat callers; manual cylinders now show in the
+        # unified cylinder list, so just rebuild that.
+        self.refresh_cyl_list()
 
-    def on_man_item_changed(self, item):
-        self.active_manual_mask[self.man_list_widget.row(item)] = (item.checkState() == QtCore.Qt.Checked)
+    def _on_show_manual_toggled(self, _):
+        self.refresh_cyl_list()
         self.update_3d_scene()
 
     def apply_output_flips(self, pts):
@@ -1175,12 +1211,19 @@ class CylinderApp(QtWidgets.QMainWindow):
         idx_auto = np.where(self.active_mask)[0]
         if len(idx_auto) > 0:
             final_points.append(self.all_points[idx_auto])
+        if (getattr(self, 'chk_show_lines', None) and self.chk_show_lines.isChecked()
+                and len(self.line_points) > 0):
+            mask = self.active_line_cyl_mask
+            if len(mask) == len(self.line_points):
+                idx_line = np.where(mask)[0]
+                if len(idx_line) > 0:
+                    final_points.append(self.line_points[idx_line])
+            else:
+                final_points.append(self.line_points)
         if self.chk_show_manual.isChecked() and len(self.manual_points) > 0:
             man_active = [p for p, a in zip(self.manual_points, self.active_manual_mask) if a]
             if len(man_active) > 0:
                 final_points.append(np.array(man_active))
-        if getattr(self, 'chk_show_lines', None) and self.chk_show_lines.isChecked() and len(self.line_points) > 0:
-            final_points.append(self.line_points)
 
         if len(final_points) == 0: return np.empty((0,3))
         return np.vstack(final_points)
@@ -1237,6 +1280,14 @@ class CylinderApp(QtWidgets.QMainWindow):
         for i, r in enumerate(self.rois):
             self.roi_list_widget.addItem(f"Box {i}: {list(r.values())}")
 
+    def _on_roi_double_clicked(self, item):
+        i = self.roi_list_widget.row(item)
+        if 0 <= i < len(self.rois):
+            r = self.rois[i]
+            self.txt_roi.setText(
+                f"{r['x']},{r['y']},{r['z']},{r['w']},{r['h']},{r['d']}"
+            )
+
     def add_roi_from_text(self):
         try:
             p = [int(x) for x in self.txt_roi.text().split(',')]
@@ -1262,7 +1313,10 @@ class CylinderApp(QtWidgets.QMainWindow):
         try:
             self.all_points, self.dims_std, self.dims_exp = solve_global_union(self.rois, self.current_scan_res, self.cfg, mode)
             active_lines = [ln for ln, ok in zip(self.lines, self.active_line_mask) if ok]
-            self.line_points, _, _ = solve_line_coverage(active_lines, self.current_scan_res, self.cfg)
+            self.line_points, _, _ = solve_line_coverage(
+                active_lines, self.current_scan_res, self.cfg, density=self.line_density
+            )
+            self.active_line_cyl_mask = np.ones(len(self.line_points), dtype=bool)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         new_count = len(self.all_points)
@@ -1271,49 +1325,164 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.refresh_cyl_list()
         self.update_3d_scene()
 
-    def update_cyl_list_labels(self):
-        self.cyl_list_widget.blockSignals(True)
-        current_seq = 0
-        for i in range(self.cyl_list_widget.count()):
-            it = self.cyl_list_widget.item(i)
-            p = self.all_points[i].astype(int)
-            if it.checkState() == QtCore.Qt.Checked:
-                it.setText(f"Seq #{current_seq} (Orig {i}): {p}")
-                current_seq += 1
-            else:
-                it.setText(f"--- (Orig {i}): {p}")
-        self.cyl_list_widget.blockSignals(False)
+    SECTION_BG = QtGui.QColor(60, 60, 70)
+    SECTION_FG = QtGui.QColor(255, 255, 255)
+
+    def _make_section_header(self, label, all_checked, kind):
+        item = QtWidgets.QListWidgetItem(f"▼ {label}")
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        item.setBackground(self.SECTION_BG)
+        item.setForeground(self.SECTION_FG)
+        item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsUserCheckable)
+        item.setCheckState(QtCore.Qt.Checked if all_checked else QtCore.Qt.Unchecked)
+        item.setData(QtCore.Qt.UserRole, ('section', kind))
+        return item
+
+    def _make_cyl_item(self, label, kind, idx, checked, deletable=False):
+        item = QtWidgets.QListWidgetItem("    " + label)
+        flags = QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsSelectable
+        item.setFlags(flags)
+        item.setCheckState(QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
+        item.setData(QtCore.Qt.UserRole, (kind, idx, bool(deletable)))
+        return item
 
     def refresh_cyl_list(self):
+        if not hasattr(self, 'cyl_list_widget'):
+            return
         self.cyl_list_widget.blockSignals(True)
         self.cyl_list_widget.clear()
-        current_seq = 0
+
+        n_auto = len(self.all_points)
+        auto_states = [bool(self.active_mask[i]) if i < len(self.active_mask) else True
+                       for i in range(n_auto)]
+        auto_all = bool(n_auto) and all(auto_states)
+        self.cyl_list_widget.addItem(
+            self._make_section_header(f"Auto from BBoxes ({n_auto})", auto_all, 'auto')
+        )
+        seq = 0
         for i, p in enumerate(self.all_points):
-            checked = bool(self.active_mask[i]) if i < len(self.active_mask) else True
+            checked = auto_states[i]
+            tag = f"A{seq}" if checked else "---"
+            self.cyl_list_widget.addItem(
+                self._make_cyl_item(f"{tag}  (Orig {i}): {p.astype(int)}", 'auto', i, checked)
+            )
             if checked:
-                label = f"Seq #{current_seq} (Orig {i}): {p.astype(int)}"
-                current_seq += 1
-            else:
-                label = f"--- (Orig {i}): {p.astype(int)}"
-            item = QtWidgets.QListWidgetItem(label)
-            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
-            item.setCheckState(QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
-            self.cyl_list_widget.addItem(item)
+                seq += 1
+
+        n_line = len(self.line_points)
+        line_show = (getattr(self, 'chk_show_lines', None) is None
+                     or self.chk_show_lines.isChecked())
+        line_states = [bool(self.active_line_cyl_mask[i]) if i < len(self.active_line_cyl_mask) else True
+                       for i in range(n_line)]
+        line_all = line_show and bool(n_line) and all(line_states)
+        self.cyl_list_widget.addItem(
+            self._make_section_header(f"Line Coverage ({n_line})", line_all, 'line')
+        )
+        seq = 0
+        for i, p in enumerate(self.line_points):
+            checked = line_show and line_states[i]
+            tag = f"L{seq}" if checked else "---"
+            self.cyl_list_widget.addItem(
+                self._make_cyl_item(f"{tag}: {p.astype(int)}", 'line', i, checked)
+            )
+            if checked:
+                seq += 1
+
+        n_man = len(self.manual_points)
+        man_show = self.chk_show_manual.isChecked() if hasattr(self, 'chk_show_manual') else True
+        man_states = [bool(self.active_manual_mask[i]) for i in range(n_man)]
+        man_all = man_show and bool(n_man) and all(man_states)
+        self.cyl_list_widget.addItem(
+            self._make_section_header(f"Manual ({n_man})", man_all, 'manual')
+        )
+        seq = 0
+        for i, p in enumerate(self.manual_points):
+            checked = man_show and man_states[i]
+            tag = f"M{seq}" if checked else "---"
+            self.cyl_list_widget.addItem(
+                self._make_cyl_item(f"{tag}: {p.astype(int)}", 'manual', i, checked, deletable=True)
+            )
+            if checked:
+                seq += 1
+
         self.cyl_list_widget.blockSignals(False)
 
-    def on_cyl_item_changed(self, item):
-        self.active_mask[self.cyl_list_widget.row(item)] = (item.checkState() == QtCore.Qt.Checked)
-        self.update_cyl_list_labels()
+    def on_combined_item_changed(self, item):
+        data = item.data(QtCore.Qt.UserRole)
+        if not data:
+            return
+        checked = (item.checkState() == QtCore.Qt.Checked)
+        kind = data[0]
+        if kind == 'section':
+            section = data[1]
+            if section == 'auto':
+                self.active_mask[:] = checked
+            elif section == 'line':
+                if hasattr(self, 'chk_show_lines'):
+                    self.chk_show_lines.blockSignals(True)
+                    self.chk_show_lines.setChecked(checked)
+                    self.chk_show_lines.blockSignals(False)
+                if len(self.active_line_cyl_mask):
+                    self.active_line_cyl_mask[:] = checked
+            elif section == 'manual':
+                self.chk_show_manual.blockSignals(True)
+                self.chk_show_manual.setChecked(checked)
+                self.chk_show_manual.blockSignals(False)
+                self.active_manual_mask = [checked] * len(self.active_manual_mask)
+            self.refresh_cyl_list()
+            self.update_3d_scene()
+            return
+
+        idx = data[1]
+        if kind == 'auto':
+            if 0 <= idx < len(self.active_mask):
+                self.active_mask[idx] = checked
+        elif kind == 'line':
+            if 0 <= idx < len(self.active_line_cyl_mask):
+                self.active_line_cyl_mask[idx] = checked
+        elif kind == 'manual':
+            if 0 <= idx < len(self.active_manual_mask):
+                self.active_manual_mask[idx] = checked
+        self.refresh_cyl_list()
         self.update_3d_scene()
 
     def set_all_cyls(self, s):
-        self.cyl_list_widget.blockSignals(True)
-        st = QtCore.Qt.Checked if s else QtCore.Qt.Unchecked
-        for i in range(self.cyl_list_widget.count()):
-            self.cyl_list_widget.item(i).setCheckState(st)
-            self.active_mask[i] = s
-        self.cyl_list_widget.blockSignals(False)
-        self.update_cyl_list_labels()
+        if len(self.active_mask):
+            self.active_mask[:] = s
+        if len(self.active_line_cyl_mask):
+            self.active_line_cyl_mask[:] = s
+        self.active_manual_mask = [s] * len(self.active_manual_mask)
+        if hasattr(self, 'chk_show_lines'):
+            self.chk_show_lines.blockSignals(True)
+            self.chk_show_lines.setChecked(s)
+            self.chk_show_lines.blockSignals(False)
+        self.chk_show_manual.blockSignals(True)
+        self.chk_show_manual.setChecked(s)
+        self.chk_show_manual.blockSignals(False)
+        self.refresh_cyl_list()
+        self.update_3d_scene()
+
+    def delete_selected_combined(self):
+        # Only manual cylinders are user-deletable. Auto cylinders are
+        # derived from ROIs and line cylinders from lines.
+        manual_indices = []
+        for item in self.cyl_list_widget.selectedItems():
+            data = item.data(QtCore.Qt.UserRole)
+            if data and data[0] == 'manual':
+                manual_indices.append(data[1])
+        if not manual_indices:
+            self.statusBar().showMessage(
+                "Only manual cylinders can be deleted. Use the Bounding Boxes/Line lists for the others.",
+                5000,
+            )
+            return
+        for i in sorted(set(manual_indices), reverse=True):
+            if 0 <= i < len(self.manual_points):
+                del self.manual_points[i]
+                del self.active_manual_mask[i]
+        self.refresh_cyl_list()
         self.update_3d_scene()
 
     def update_3d_scene(self):
@@ -1346,7 +1515,7 @@ class CylinderApp(QtWidgets.QMainWindow):
             vb=np.array([0, r['h'], 0])
             vc=np.array([0, 0, r['d']*self.z_ratio])
             cube = pv.Cube(bounds=(o[0], o[0]+va[0], o[1], o[1]+vb[1], o[2], o[2]+vc[2]))
-            act = self.plotter.add_mesh(cube, style='wireframe', color='cyan', line_width=2)
+            act = self.plotter.add_mesh(cube, style='wireframe', color='cyan', line_width=2, lighting=False)
             self.roi_actors.append(act)
 
         # Draw the user-defined line segments (always visible, like ROI wireframes)
@@ -1355,10 +1524,10 @@ class CylinderApp(QtWidgets.QMainWindow):
             b = np.array([p2[0], p2[1], p2[2] * self.z_ratio])
             line_mesh = pv.Line(a, b)
             color = "orange" if active else "#666666"
-            act = self.plotter.add_mesh(line_mesh, color=color, line_width=3)
+            act = self.plotter.add_mesh(line_mesh, color=color, line_width=3, lighting=False)
             self.line_actors.append(act)
             pts_mesh = pv.PolyData(np.vstack([a, b]))
-            act_pts = self.plotter.add_mesh(pts_mesh, color=color, point_size=10, render_points_as_spheres=True)
+            act_pts = self.plotter.add_mesh(pts_mesh, color=color, point_size=10, render_points_as_spheres=True, lighting=False)
             self.line_actors.append(act_pts)
 
         # Collect all label points and sequential IDs
@@ -1374,10 +1543,10 @@ class CylinderApp(QtWidgets.QMainWindow):
             vis_H_std = h_std * self.z_ratio; vis_H_exp = h_exp * self.z_ratio
 
             c1 = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=d_std/2, height=vis_H_std)
-            self.actor_std = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c1, scale=False), color='cyan', opacity=self.slider_cyl.value()/100)
+            self.actor_std = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c1, scale=False), color='cyan', opacity=self.slider_cyl.value()/100, lighting=False)
 
             c2 = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=d_exp/2, height=vis_H_exp)
-            self.actor_exp = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c2, scale=False), color='magenta', opacity=self.slider_cyl.value()/100)
+            self.actor_exp = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c2, scale=False), color='magenta', opacity=self.slider_cyl.value()/100, lighting=False)
 
             for pt in vp:
                 label_points.append(pt)
@@ -1387,26 +1556,32 @@ class CylinderApp(QtWidgets.QMainWindow):
         # Line-coverage cylinders (orange) — share dims with std cylinders
         if (getattr(self, 'chk_show_lines', None) and self.chk_show_lines.isChecked()
                 and len(self.line_points) > 0):
-            lp = self.line_points.copy()
-            lp[:, 2] *= self.z_ratio
-            d_std, h_std = self.dims_std
-            d_exp, h_exp = self.dims_exp
-            if d_std > 0 and h_std > 0:
-                c_l = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
-                                  radius=d_std/2, height=h_std*self.z_ratio)
-                self.actor_line = self.plotter.add_mesh(
-                    pv.PolyData(lp).glyph(geom=c_l, scale=False),
-                    color='orange', opacity=self.slider_cyl.value()/100)
-            if d_exp > 0 and h_exp > 0:
-                c_le = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
-                                   radius=d_exp/2, height=h_exp*self.z_ratio)
-                self.actor_line_exp = self.plotter.add_mesh(
-                    pv.PolyData(lp).glyph(geom=c_le, scale=False),
-                    color='#ff6600', opacity=self.slider_cyl.value()/100)
-            for pt in lp:
-                label_points.append(pt)
-                label_ids.append(f"L{seq}")
-                seq += 1
+            mask = self.active_line_cyl_mask
+            if len(mask) == len(self.line_points):
+                lp_src = self.line_points[np.where(mask)[0]]
+            else:
+                lp_src = self.line_points
+            if len(lp_src) > 0:
+                lp = lp_src.copy()
+                lp[:, 2] *= self.z_ratio
+                d_std, h_std = self.dims_std
+                d_exp, h_exp = self.dims_exp
+                if d_std > 0 and h_std > 0:
+                    c_l = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
+                                      radius=d_std/2, height=h_std*self.z_ratio)
+                    self.actor_line = self.plotter.add_mesh(
+                        pv.PolyData(lp).glyph(geom=c_l, scale=False),
+                        color='orange', opacity=self.slider_cyl.value()/100, lighting=False)
+                if d_exp > 0 and h_exp > 0:
+                    c_le = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
+                                       radius=d_exp/2, height=h_exp*self.z_ratio)
+                    self.actor_line_exp = self.plotter.add_mesh(
+                        pv.PolyData(lp).glyph(geom=c_le, scale=False),
+                        color='#ff6600', opacity=self.slider_cyl.value()/100, lighting=False)
+                for pt in lp:
+                    label_points.append(pt)
+                    label_ids.append(f"L{seq}")
+                    seq += 1
 
         if self.chk_show_manual.isChecked() and len(self.manual_points) > 0:
             man_active = [p for p, a in zip(self.manual_points, self.active_manual_mask) if a]
@@ -1416,11 +1591,11 @@ class CylinderApp(QtWidgets.QMainWindow):
                 vis_H_std = self.dims_std[1] * self.z_ratio
 
                 c_man = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_std[0]/2, height=vis_H_std)
-                self.actor_man = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man, scale=False), color='yellow', opacity=self.slider_cyl.value()/100)
+                self.actor_man = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False)
 
                 vis_H_exp = self.dims_exp[1] * self.z_ratio
                 c_man_exp = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_exp[0]/2, height=vis_H_exp)
-                self.actor_man_exp = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man_exp, scale=False), color='yellow', opacity=self.slider_cyl.value()/100)
+                self.actor_man_exp = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man_exp, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False)
 
                 for pt in mp:
                     label_points.append(pt)

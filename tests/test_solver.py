@@ -109,6 +109,20 @@ class TestSolveLineCoverage:
         assert len(pts) == 1
         assert np.allclose(pts[0], np.array(p))
 
+    def test_density_scales_spacing(self):
+        (D_std, _), _ = cylinder_dims(20, CFG)
+        p1 = (0.0, 0.0, 0.0)
+        p2 = (10 * D_std, 0.0, 0.0)
+        # density=2 → spacing halved (overlap), more cylinders
+        pts1, _, _ = solve_line_coverage([(p1, p2)], 20, CFG, density=1.0)
+        pts2, _, _ = solve_line_coverage([(p1, p2)], 20, CFG, density=2.0)
+        pts_h, _, _ = solve_line_coverage([(p1, p2)], 20, CFG, density=0.5)
+        d2 = np.diff(np.sort(pts2[:, 0]))
+        dh = np.diff(np.sort(pts_h[:, 0]))
+        assert len(pts2) > len(pts1) > len(pts_h)
+        assert np.allclose(d2, D_std / 2, atol=1e-6)
+        assert np.allclose(dh, 2 * D_std, atol=1e-6)
+
     def test_multiple_lines_aggregate(self):
         (D_std, H_std), _ = cylinder_dims(20, CFG)
         ln_a = ((0.0, 0.0, 0.0), (10 * D_std, 0.0, 0.0))

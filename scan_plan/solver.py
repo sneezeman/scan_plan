@@ -98,16 +98,18 @@ def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
     return final_points, (D_std, H_std), (D_exp, H_exp)
 
 
-def solve_line_coverage(line_list, scan_res_nm, config):
-    """Distribute cylinder centers along each (P1, P2) line so adjacent
-    cylinders touch but do not overlap along the line.
+def solve_line_coverage(line_list, scan_res_nm, config, density=1.0):
+    """Distribute cylinder centers along each (P1, P2) line.
 
     Each line is a tuple (p1, p2) where p1, p2 are length-3 sequences in
     prescan-pixel coordinates. Cylinders are anisotropic: radius R = D_std/2
     in xy and half-height H_std/2 in z. Along a unit direction (dx,dy,dz)
     a cylinder centered on the line covers a half-length of
         h = min( R / sqrt(dx^2 + dy^2),  (H_std/2) / |dz| )
-    so consecutive centers are spaced by 2*h.
+    so adjacent centers at density=1 are spaced by 2*h (touching, no overlap).
+
+    *density* > 1 packs cylinders tighter (they overlap); *density* < 1 leaves
+    gaps. Spacing along the line is (2*h)/density.
 
     Returns (points, (D_std, H_std), (D_exp, H_exp)).
     """
@@ -117,6 +119,7 @@ def solve_line_coverage(line_list, scan_res_nm, config):
 
     R = D_std / 2.0
     half_h_z = H_std / 2.0
+    density = max(float(density), 1e-6)
 
     out = []
     for p1, p2 in line_list:
@@ -136,7 +139,7 @@ def solve_line_coverage(line_list, scan_res_nm, config):
         if abs(dz) > 1e-12:
             cand.append(half_h_z / abs(dz))
         half_len = min(cand) if cand else L
-        spacing = 2.0 * half_len
+        spacing = (2.0 * half_len) / density
         if spacing <= 0:
             out.append(a)
             continue
