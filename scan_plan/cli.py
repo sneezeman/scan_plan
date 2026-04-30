@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import argparse
+import datetime
 import logging
 import warnings
 
@@ -43,6 +44,33 @@ def _update_user_config(config_path, updates):
         json.dump(user_cfg, f, indent=4)
 
 
+def _save_config_history(config_path):
+    """Write a timestamped copy of *config_path* into a sibling history dir.
+
+    Layout:
+      <config_dir>/scan_plan_config_history/<basename>_<YYYYMMDD-HHMMSS>.json
+
+    Errors are logged but not raised — history is best-effort.
+    """
+    if not os.path.exists(config_path):
+        return
+    try:
+        cfg_dir = os.path.dirname(os.path.abspath(config_path)) or "."
+        history_dir = os.path.join(cfg_dir, "scan_plan_config_history")
+        os.makedirs(history_dir, exist_ok=True)
+        base = os.path.basename(config_path)
+        stem, ext = os.path.splitext(base)
+        if not ext:
+            ext = ".json"
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = os.path.join(history_dir, f"{stem}_{ts}{ext}")
+        with open(config_path, "r") as src, open(dest, "w") as dst:
+            dst.write(src.read())
+        logger.info("Saved config history copy: %s", dest)
+    except (OSError, PermissionError) as e:
+        logger.warning("Could not save config history copy: %s", e)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Advanced GUI for Cylinder Packing Strategy in high-resolution tomography."
@@ -66,6 +94,7 @@ def main():
         updates = dlg.get_updates()
         cfg.update(updates)
         _update_user_config(args.config, updates)
+        _save_config_history(args.config)
 
     fp = cfg['volume_path']
     detected = detect_tiff_dims(fp)

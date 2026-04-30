@@ -848,9 +848,26 @@ class CylinderApp(QtWidgets.QMainWindow):
         h_vol.addWidget(self.slider_vol)
         h_vol.addWidget(QtWidgets.QLabel("Max:"))
         self.txt_vol_max = QtWidgets.QLineEdit("1.0")
-        self.txt_vol_max.setFixedWidth(40)
+        self.txt_vol_max.setFixedWidth(50)
         self.txt_vol_max.returnPressed.connect(self.update_opacity)
         h_vol.addWidget(self.txt_vol_max)
+        # Up/down arrows that scale Max by 10 each click (order of magnitude).
+        btn_max_up = QtWidgets.QToolButton()
+        btn_max_up.setArrowType(QtCore.Qt.UpArrow)
+        btn_max_up.setToolTip("Multiply Max by 10")
+        btn_max_up.clicked.connect(lambda: self._scale_vol_max(10.0))
+        btn_max_dn = QtWidgets.QToolButton()
+        btn_max_dn.setArrowType(QtCore.Qt.DownArrow)
+        btn_max_dn.setToolTip("Divide Max by 10")
+        btn_max_dn.clicked.connect(lambda: self._scale_vol_max(0.1))
+        v_arrows = QtWidgets.QVBoxLayout()
+        v_arrows.setSpacing(0)
+        v_arrows.setContentsMargins(0, 0, 0, 0)
+        v_arrows.addWidget(btn_max_up)
+        v_arrows.addWidget(btn_max_dn)
+        arrows_w = QtWidgets.QWidget()
+        arrows_w.setLayout(v_arrows)
+        h_vol.addWidget(arrows_w)
         lo.addLayout(h_vol)
 
         grp.setLayout(lo)
@@ -1143,10 +1160,40 @@ class CylinderApp(QtWidgets.QMainWindow):
         grp.setLayout(lo)
         return grp
 
+    # Default Vol Opacity Max per blending mode. Average blending averages
+    # all sample contributions, so its useful range is much smaller than
+    # Composite's; MIP/MinIP collapse along the ray, so they sit between.
+    _VOL_MAX_DEFAULTS = {
+        "composite": 1.0,
+        "maximum": 0.1,
+        "minimum": 0.1,
+        "average": 0.01,
+    }
+
+    def _scale_vol_max(self, factor):
+        try:
+            cur = float(self.txt_vol_max.text())
+        except ValueError:
+            cur = 1.0
+        new_val = cur * factor
+        # Avoid drifting to absurd values; clamp to a sensible window.
+        if new_val < 1e-6:
+            new_val = 1e-6
+        elif new_val > 1e6:
+            new_val = 1e6
+        # Keep the field tidy: scientific notation when the value is far
+        # from 1 in either direction, plain otherwise.
+        if new_val >= 100 or (0 < new_val < 0.01):
+            txt = f"{new_val:.2e}"
+        else:
+            txt = f"{new_val:g}"
+        self.txt_vol_max.setText(txt)
+        self.update_opacity()
+
     def update_volume_render_mode(self):
         if self.vol_grid is None: return
         if self.vol_actor is not None:
-            self.plotter.remove_actor(self.vol_actor)
+            self.plotter.remove_actor(self.vol_actor, reset_camera=False)
             self.vol_actor = None
 
         mode_str = self.combo_render.currentText()
@@ -1155,7 +1202,15 @@ class CylinderApp(QtWidgets.QMainWindow):
         elif "MinIP" in mode_str: blend_mode = "minimum"
         elif "Average" in mode_str: blend_mode = "average"
 
-        self.vol_actor = self.plotter.add_volume(self.vol_grid, cmap="gray", clim=self.clim, opacity="linear", blending=blend_mode)
+        # Auto-set Vol Opacity Max on mode change so the volume is visible
+        # without manual fiddling. The user can still override afterwards.
+        default_max = self._VOL_MAX_DEFAULTS.get(blend_mode, 1.0)
+        self.txt_vol_max.setText(f"{default_max:g}")
+
+        self.vol_actor = self.plotter.add_volume(
+            self.vol_grid, cmap="gray", clim=self.clim,
+            opacity="linear", blending=blend_mode, reset_camera=False,
+        )
         # Re-add cylinder/ROI/label actors on top so the new volume actor's
         # shader state doesn't clobber their colors.
         self.update_3d_scene()
@@ -1487,13 +1542,13 @@ class CylinderApp(QtWidgets.QMainWindow):
 
     def update_3d_scene(self):
         self.plotter.suppress_rendering = True
-        if self.actor_std: self.plotter.remove_actor(self.actor_std)
-        if self.actor_exp: self.plotter.remove_actor(self.actor_exp)
-        if self.actor_man: self.plotter.remove_actor(self.actor_man)
-        if self.actor_man_exp: self.plotter.remove_actor(self.actor_man_exp)
-        if self.actor_line: self.plotter.remove_actor(self.actor_line)
-        if self.actor_line_exp: self.plotter.remove_actor(self.actor_line_exp)
-        if self.actor_labels: self.plotter.remove_actor(self.actor_labels)
+        if self.actor_std: self.plotter.remove_actor(self.actor_std, reset_camera=False)
+        if self.actor_exp: self.plotter.remove_actor(self.actor_exp, reset_camera=False)
+        if self.actor_man: self.plotter.remove_actor(self.actor_man, reset_camera=False)
+        if self.actor_man_exp: self.plotter.remove_actor(self.actor_man_exp, reset_camera=False)
+        if self.actor_line: self.plotter.remove_actor(self.actor_line, reset_camera=False)
+        if self.actor_line_exp: self.plotter.remove_actor(self.actor_line_exp, reset_camera=False)
+        if self.actor_labels: self.plotter.remove_actor(self.actor_labels, reset_camera=False)
         self.actor_std = None
         self.actor_exp = None
         self.actor_man = None
@@ -1503,10 +1558,10 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.actor_labels = None
 
         for act in self.roi_actors:
-            self.plotter.remove_actor(act)
+            self.plotter.remove_actor(act, reset_camera=False)
         self.roi_actors.clear()
         for act in self.line_actors:
-            self.plotter.remove_actor(act)
+            self.plotter.remove_actor(act, reset_camera=False)
         self.line_actors.clear()
 
         for r in self.rois:
@@ -1515,7 +1570,7 @@ class CylinderApp(QtWidgets.QMainWindow):
             vb=np.array([0, r['h'], 0])
             vc=np.array([0, 0, r['d']*self.z_ratio])
             cube = pv.Cube(bounds=(o[0], o[0]+va[0], o[1], o[1]+vb[1], o[2], o[2]+vc[2]))
-            act = self.plotter.add_mesh(cube, style='wireframe', color='cyan', line_width=2, lighting=False)
+            act = self.plotter.add_mesh(cube, style='wireframe', color='cyan', line_width=2, lighting=False, reset_camera=False)
             self.roi_actors.append(act)
 
         # Draw the user-defined line segments (always visible, like ROI wireframes)
@@ -1524,10 +1579,10 @@ class CylinderApp(QtWidgets.QMainWindow):
             b = np.array([p2[0], p2[1], p2[2] * self.z_ratio])
             line_mesh = pv.Line(a, b)
             color = "orange" if active else "#666666"
-            act = self.plotter.add_mesh(line_mesh, color=color, line_width=3, lighting=False)
+            act = self.plotter.add_mesh(line_mesh, color=color, line_width=3, lighting=False, reset_camera=False)
             self.line_actors.append(act)
             pts_mesh = pv.PolyData(np.vstack([a, b]))
-            act_pts = self.plotter.add_mesh(pts_mesh, color=color, point_size=10, render_points_as_spheres=True, lighting=False)
+            act_pts = self.plotter.add_mesh(pts_mesh, color=color, point_size=10, render_points_as_spheres=True, lighting=False, reset_camera=False)
             self.line_actors.append(act_pts)
 
         # Collect all label points and sequential IDs
@@ -1543,10 +1598,10 @@ class CylinderApp(QtWidgets.QMainWindow):
             vis_H_std = h_std * self.z_ratio; vis_H_exp = h_exp * self.z_ratio
 
             c1 = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=d_std/2, height=vis_H_std)
-            self.actor_std = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c1, scale=False), color='cyan', opacity=self.slider_cyl.value()/100, lighting=False)
+            self.actor_std = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c1, scale=False), color='cyan', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
 
             c2 = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=d_exp/2, height=vis_H_exp)
-            self.actor_exp = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c2, scale=False), color='magenta', opacity=self.slider_cyl.value()/100, lighting=False)
+            self.actor_exp = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c2, scale=False), color='magenta', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
 
             for pt in vp:
                 label_points.append(pt)
@@ -1571,13 +1626,15 @@ class CylinderApp(QtWidgets.QMainWindow):
                                       radius=d_std/2, height=h_std*self.z_ratio)
                     self.actor_line = self.plotter.add_mesh(
                         pv.PolyData(lp).glyph(geom=c_l, scale=False),
-                        color='orange', opacity=self.slider_cyl.value()/100, lighting=False)
+                        color='orange', opacity=self.slider_cyl.value()/100,
+                        lighting=False, reset_camera=False)
                 if d_exp > 0 and h_exp > 0:
                     c_le = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
                                        radius=d_exp/2, height=h_exp*self.z_ratio)
                     self.actor_line_exp = self.plotter.add_mesh(
                         pv.PolyData(lp).glyph(geom=c_le, scale=False),
-                        color='#ff6600', opacity=self.slider_cyl.value()/100, lighting=False)
+                        color='#ff6600', opacity=self.slider_cyl.value()/100,
+                        lighting=False, reset_camera=False)
                 for pt in lp:
                     label_points.append(pt)
                     label_ids.append(f"L{seq}")
@@ -1591,11 +1648,11 @@ class CylinderApp(QtWidgets.QMainWindow):
                 vis_H_std = self.dims_std[1] * self.z_ratio
 
                 c_man = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_std[0]/2, height=vis_H_std)
-                self.actor_man = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False)
+                self.actor_man = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
 
                 vis_H_exp = self.dims_exp[1] * self.z_ratio
                 c_man_exp = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_exp[0]/2, height=vis_H_exp)
-                self.actor_man_exp = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man_exp, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False)
+                self.actor_man_exp = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man_exp, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
 
                 for pt in mp:
                     label_points.append(pt)
@@ -1608,7 +1665,8 @@ class CylinderApp(QtWidgets.QMainWindow):
             self.actor_labels = self.plotter.add_point_labels(
                 label_poly, "labels", font_size=12, text_color="white",
                 shadow=True, show_points=False,
-                always_visible=True, shape_opacity=0.4
+                always_visible=True, shape_opacity=0.4,
+                reset_camera=False,
             )
 
         self.plotter.suppress_rendering = False
