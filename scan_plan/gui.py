@@ -82,10 +82,10 @@ class ConfigDialog(QtWidgets.QDialog):
         self.txt_header = QtWidgets.QLineEdit(str(config.get("raw_header_bytes", 0)))
         form.addRow("Raw header bytes:", self.txt_header)
 
-        self.txt_prescan_xy = QtWidgets.QLineEdit(str(config.get("prescan_pixel_size_xy", 180)))
+        self.txt_prescan_xy = QtWidgets.QLineEdit(str(config.get("prescan_pixel_size_xy", 150)))
         form.addRow("Prescan pixel size XY (nm):", self.txt_prescan_xy)
 
-        self.txt_prescan_z = QtWidgets.QLineEdit(str(config.get("prescan_z_step", 180)))
+        self.txt_prescan_z = QtWidgets.QLineEdit(str(config.get("prescan_z_step", 150)))
         form.addRow("Prescan Z step (nm):", self.txt_prescan_z)
 
         self.txt_scan_px = QtWidgets.QLineEdit(str(config.get("scan_pixel_size", 20)))
@@ -194,9 +194,9 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         gb_conf = QtWidgets.QGroupBox("Machine Reference (Refscan 0)")
         fl_conf = QtWidgets.QFormLayout()
-        self.in_su = QtWidgets.QLineEdit("-0.5595")
-        self.in_sv = QtWidgets.QLineEdit("0.06712")
-        self.in_sz = QtWidgets.QLineEdit("1.455")
+        self.in_su = QtWidgets.QLineEdit("0")
+        self.in_sv = QtWidgets.QLineEdit("0")
+        self.in_sz = QtWidgets.QLineEdit("0")
         self.in_px = QtWidgets.QLineEdit("180")
         self.in_final_px = QtWidgets.QLineEdit("100")
         fl_conf.addRow("su (mm):", self.in_su)
@@ -737,12 +737,9 @@ class CylinderApp(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(panel)
 
         layout.addWidget(self._create_appearance_group())
-        layout.addWidget(self._create_roi_group())
-        layout.addWidget(self._make_collapsible("Line Coverage", self._create_line_content()))
+        layout.addWidget(self._create_add_cylinders_tabs())
         layout.addWidget(self._create_config_group())
-        layout.addWidget(self._make_collapsible("Shift Bounding Boxes", self._create_roi_shift_content()))
         layout.addWidget(self._create_auto_grid_group())
-        layout.addWidget(self._make_collapsible("Manual Cylinders", self._create_manual_content()))
         layout.addWidget(self._create_orient_group())
         layout.addWidget(self._create_actions_group())
 
@@ -761,6 +758,46 @@ class CylinderApp(QtWidgets.QMainWindow):
         except Exception:
             pass
         main_layout.addWidget(self.plotter)
+
+    def _create_add_cylinders_tabs(self):
+        """Group the three cylinder-source UIs (Bounding Boxes, Line Coverage,
+        Manual Centers) into a single tabbed container so they live together."""
+        grp = QtWidgets.QGroupBox("Add Cylinders")
+        outer = QtWidgets.QVBoxLayout()
+        outer.setContentsMargins(4, 4, 4, 4)
+
+        tabs = QtWidgets.QTabWidget()
+
+        # --- Tab: Bounding Boxes (incl. shift sub-section) ---
+        bbox_tab = QtWidgets.QWidget()
+        bbox_lo = QtWidgets.QVBoxLayout(bbox_tab)
+        bbox_lo.setContentsMargins(4, 4, 4, 4)
+        bbox_lo.addWidget(self._create_roi_group())
+        bbox_lo.addWidget(self._make_collapsible(
+            "Shift Bounding Boxes", self._create_roi_shift_content()
+        ))
+        bbox_lo.addStretch()
+        tabs.addTab(bbox_tab, "Bounding Boxes")
+
+        # --- Tab: Line Coverage ---
+        line_tab = QtWidgets.QWidget()
+        line_lo = QtWidgets.QVBoxLayout(line_tab)
+        line_lo.setContentsMargins(4, 4, 4, 4)
+        line_lo.addWidget(self._create_line_content())
+        line_lo.addStretch()
+        tabs.addTab(line_tab, "Line Coverage")
+
+        # --- Tab: Manual Centers ---
+        man_tab = QtWidgets.QWidget()
+        man_lo = QtWidgets.QVBoxLayout(man_tab)
+        man_lo.setContentsMargins(4, 4, 4, 4)
+        man_lo.addWidget(self._create_manual_content())
+        man_lo.addStretch()
+        tabs.addTab(man_tab, "Manual Centers")
+
+        outer.addWidget(tabs)
+        grp.setLayout(outer)
+        return grp
 
     def _make_collapsible(self, title, content_widget, collapsed=True):
         """Return a widget with a togglable header and collapsible content."""

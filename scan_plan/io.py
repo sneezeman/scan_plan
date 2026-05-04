@@ -151,8 +151,8 @@ def load_config(filepath):
         "raw_dims": [2048, 2048, 2048],
         "raw_dtype": "float32",
         "raw_header_bytes": 0,
-        "prescan_pixel_size_xy": 180,
-        "prescan_z_step": 180,
+        "prescan_pixel_size_xy": 150,
+        "prescan_z_step": 150,
         "scan_pixel_size": 20,
         "rois": []
     }
