@@ -179,6 +179,29 @@ def load_config(filepath):
     return cfg
 
 
+def update_user_config_keys(config_path, updates):
+    """Patch *config_path* with *updates*, preserving any keys not mentioned.
+
+    Used for incidental persistence (last-used dialog dirs, etc.) without
+    touching instrument defaults that load_config merged in at runtime.
+    Errors are logged, never raised.
+    """
+    if not config_path or not os.path.exists(config_path):
+        return
+    try:
+        with open(config_path, 'r') as f:
+            user_cfg = json.load(f)
+    except Exception as e:
+        logger.warning("Could not read config for update: %s", e)
+        return
+    user_cfg.update(updates)
+    try:
+        with open(config_path, 'w') as f:
+            json.dump(user_cfg, f, indent=4)
+    except (OSError, PermissionError) as e:
+        logger.warning("Could not write config update: %s", e)
+
+
 def detect_tiff_dims(filepath):
     """Auto-detect TIFF dimensions and dtype.
 

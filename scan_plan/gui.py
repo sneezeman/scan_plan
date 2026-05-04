@@ -13,7 +13,7 @@ from pyvistaqt import QtInteractor
 
 from scan_plan.volume_registration import VolumeRegistration
 from scan_plan.nml_exporter import generate_nml
-from scan_plan.io import parse_nml, detect_tiff_dims
+from scan_plan.io import parse_nml, detect_tiff_dims, update_user_config_keys
 from scan_plan.solver import solve_global_union, solve_line_coverage
 
 
@@ -56,15 +56,19 @@ class ConfigDialog(QtWidgets.QDialog):
         h_vol.addWidget(btn_browse)
         form.addRow("Volume file:", h_vol)
 
-        self.txt_binning = QtWidgets.QLineEdit(str(config.get("binning", 1)))
-        form.addRow("Binning:", self.txt_binning)
+        self.spin_binning = QtWidgets.QSpinBox()
+        self.spin_binning.setRange(1, 64)
+        self.spin_binning.setValue(int(config.get("binning", 1)))
+        form.addRow("Binning:", self.spin_binning)
 
         dims = config.get("raw_dims", [2048, 2048, 2048])
         h_dims = QtWidgets.QHBoxLayout()
-        self.txt_dim_x = QtWidgets.QLineEdit(str(dims[0]))
-        self.txt_dim_y = QtWidgets.QLineEdit(str(dims[1]))
-        self.txt_dim_z = QtWidgets.QLineEdit(str(dims[2]))
-        for lbl, w in (("X", self.txt_dim_x), ("Y", self.txt_dim_y), ("Z", self.txt_dim_z)):
+        self.spin_dim_x = QtWidgets.QSpinBox(); self.spin_dim_x.setRange(1, 100000); self.spin_dim_x.setValue(int(dims[0]))
+        self.spin_dim_y = QtWidgets.QSpinBox(); self.spin_dim_y.setRange(1, 100000); self.spin_dim_y.setValue(int(dims[1]))
+        self.spin_dim_z = QtWidgets.QSpinBox(); self.spin_dim_z.setRange(1, 100000); self.spin_dim_z.setValue(int(dims[2]))
+        for w in (self.spin_dim_x, self.spin_dim_y, self.spin_dim_z):
+            w.setSuffix(" px")
+        for lbl, w in (("X", self.spin_dim_x), ("Y", self.spin_dim_y), ("Z", self.spin_dim_z)):
             h_dims.addWidget(QtWidgets.QLabel(lbl))
             h_dims.addWidget(w)
         btn_detect = QtWidgets.QPushButton("Detect TIFF")
@@ -79,17 +83,32 @@ class ConfigDialog(QtWidgets.QDialog):
         self.combo_dtype.setCurrentText(str(config.get("raw_dtype", "float32")))
         form.addRow("Raw dtype:", self.combo_dtype)
 
-        self.txt_header = QtWidgets.QLineEdit(str(config.get("raw_header_bytes", 0)))
-        form.addRow("Raw header bytes:", self.txt_header)
+        self.spin_header = QtWidgets.QSpinBox()
+        self.spin_header.setRange(0, 1_000_000_000)
+        self.spin_header.setValue(int(config.get("raw_header_bytes", 0)))
+        self.spin_header.setSuffix(" B")
+        form.addRow("Raw header bytes:", self.spin_header)
 
-        self.txt_prescan_xy = QtWidgets.QLineEdit(str(config.get("prescan_pixel_size_xy", 150)))
-        form.addRow("Prescan pixel size XY (nm):", self.txt_prescan_xy)
+        self.spin_prescan_xy = QtWidgets.QDoubleSpinBox()
+        self.spin_prescan_xy.setRange(0.01, 100000.0)
+        self.spin_prescan_xy.setDecimals(2)
+        self.spin_prescan_xy.setValue(float(config.get("prescan_pixel_size_xy", 150)))
+        self.spin_prescan_xy.setSuffix(" nm")
+        form.addRow("Prescan pixel size XY:", self.spin_prescan_xy)
 
-        self.txt_prescan_z = QtWidgets.QLineEdit(str(config.get("prescan_z_step", 150)))
-        form.addRow("Prescan Z step (nm):", self.txt_prescan_z)
+        self.spin_prescan_z = QtWidgets.QDoubleSpinBox()
+        self.spin_prescan_z.setRange(0.01, 100000.0)
+        self.spin_prescan_z.setDecimals(2)
+        self.spin_prescan_z.setValue(float(config.get("prescan_z_step", 150)))
+        self.spin_prescan_z.setSuffix(" nm")
+        form.addRow("Prescan Z step:", self.spin_prescan_z)
 
-        self.txt_scan_px = QtWidgets.QLineEdit(str(config.get("scan_pixel_size", 20)))
-        form.addRow("Scan pixel size (nm):", self.txt_scan_px)
+        self.spin_scan_px = QtWidgets.QDoubleSpinBox()
+        self.spin_scan_px.setRange(0.01, 100000.0)
+        self.spin_scan_px.setDecimals(2)
+        self.spin_scan_px.setValue(float(config.get("scan_pixel_size", 20)))
+        self.spin_scan_px.setSuffix(" nm")
+        form.addRow("Scan pixel size:", self.spin_scan_px)
 
         form_box.setLayout(form)
         layout.addWidget(form_box)
@@ -128,31 +147,27 @@ class ConfigDialog(QtWidgets.QDialog):
         if det is None:
             return
         new_dims, new_dtype = det
-        self.txt_dim_x.setText(str(new_dims[0]))
-        self.txt_dim_y.setText(str(new_dims[1]))
-        self.txt_dim_z.setText(str(new_dims[2]))
+        self.spin_dim_x.setValue(int(new_dims[0]))
+        self.spin_dim_y.setValue(int(new_dims[1]))
+        self.spin_dim_z.setValue(int(new_dims[2]))
         self.combo_dtype.setCurrentText(str(new_dtype))
 
     def _on_accept(self):
-        try:
-            updates = {
-                "volume_path": self.txt_volume.text().strip(),
-                "binning": int(self.txt_binning.text()),
-                "raw_dims": [
-                    int(self.txt_dim_x.text()),
-                    int(self.txt_dim_y.text()),
-                    int(self.txt_dim_z.text()),
-                ],
-                "raw_dtype": self.combo_dtype.currentText().strip(),
-                "raw_header_bytes": int(self.txt_header.text()),
-                "prescan_pixel_size_xy": float(self.txt_prescan_xy.text()),
-                "prescan_z_step": float(self.txt_prescan_z.text()),
-                "scan_pixel_size": float(self.txt_scan_px.text()),
-            }
-        except ValueError as e:
-            QtWidgets.QMessageBox.warning(self, "Invalid input",
-                                          f"Numeric field could not be parsed:\n{e}")
-            return
+        # Spinboxes guarantee numeric values — no try/except needed.
+        updates = {
+            "volume_path": self.txt_volume.text().strip(),
+            "binning": self.spin_binning.value(),
+            "raw_dims": [
+                self.spin_dim_x.value(),
+                self.spin_dim_y.value(),
+                self.spin_dim_z.value(),
+            ],
+            "raw_dtype": self.combo_dtype.currentText().strip(),
+            "raw_header_bytes": self.spin_header.value(),
+            "prescan_pixel_size_xy": self.spin_prescan_xy.value(),
+            "prescan_z_step": self.spin_prescan_z.value(),
+            "scan_pixel_size": self.spin_scan_px.value(),
+        }
         self.config.update(updates)
         self.accepted_proceed = True
         self.accept()
@@ -194,16 +209,28 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         gb_conf = QtWidgets.QGroupBox("Machine Reference (Refscan 0)")
         fl_conf = QtWidgets.QFormLayout()
-        self.in_su = QtWidgets.QLineEdit("0")
-        self.in_sv = QtWidgets.QLineEdit("0")
-        self.in_sz = QtWidgets.QLineEdit("0")
-        self.in_px = QtWidgets.QLineEdit("180")
-        self.in_final_px = QtWidgets.QLineEdit("100")
-        fl_conf.addRow("su (mm):", self.in_su)
-        fl_conf.addRow("sv (mm):", self.in_sv)
-        fl_conf.addRow("sz (mm):", self.in_sz)
-        fl_conf.addRow("Refscan Pixel Size (nm):", self.in_px)
-        fl_conf.addRow("Final Pixel Size (nm):", self.in_final_px)
+        def _mm(default):
+            sb = QtWidgets.QDoubleSpinBox()
+            sb.setRange(-1000.0, 1000.0)
+            sb.setDecimals(5)
+            sb.setSingleStep(0.001)
+            sb.setSuffix(" mm")
+            sb.setValue(default)
+            return sb
+        self.in_su = _mm(0.0)
+        self.in_sv = _mm(0.0)
+        self.in_sz = _mm(0.0)
+        self.in_px = QtWidgets.QDoubleSpinBox()
+        self.in_px.setRange(0.01, 100000.0); self.in_px.setDecimals(2)
+        self.in_px.setValue(180.0); self.in_px.setSuffix(" nm")
+        self.in_final_px = QtWidgets.QDoubleSpinBox()
+        self.in_final_px.setRange(0.01, 100000.0); self.in_final_px.setDecimals(2)
+        self.in_final_px.setValue(100.0); self.in_final_px.setSuffix(" nm")
+        fl_conf.addRow("su:", self.in_su)
+        fl_conf.addRow("sv:", self.in_sv)
+        fl_conf.addRow("sz:", self.in_sz)
+        fl_conf.addRow("Refscan Pixel Size:", self.in_px)
+        fl_conf.addRow("Final Pixel Size:", self.in_final_px)
         gb_conf.setLayout(fl_conf)
         layout.addWidget(gb_conf)
 
@@ -310,12 +337,21 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         gb_det = QtWidgets.QGroupBox("Per-Point Analysis")
         l_det = QtWidgets.QVBoxLayout()
-        self.table_results = QtWidgets.QTableWidget(0, 4)
-        self.table_results.setHorizontalHeaderLabels(["ID", "Refscan (Pixels)", "Transformed", "Error (µm)"])
+        self.table_results = QtWidgets.QTableWidget(0, 5)
+        self.table_results.setHorizontalHeaderLabels(
+            ["ID", "Refscan (Pixels)", "Transformed", "Error (µm)", "Motors (su, sv, sz mm)"]
+        )
         self.table_results.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         l_det.addWidget(self.table_results)
         gb_det.setLayout(l_det)
         layout.addWidget(gb_det)
+
+        # Motor-limit summary — populated by update_results_ui. Stays visible
+        # next to the SAVE button so out-of-range placement is obvious before
+        # the file dialog opens.
+        self.lbl_motor_warn = QtWidgets.QLabel("Motor limits: —")
+        self.lbl_motor_warn.setStyleSheet("font-weight: bold; padding: 4px;")
+        layout.addWidget(self.lbl_motor_warn)
 
         layout.addWidget(QtWidgets.QLabel("Raw Output:"))
         self.txt_raw = QtWidgets.QTextEdit()
@@ -368,10 +404,12 @@ class RegistrationDialog(QtWidgets.QDialog):
 
     def load_match_points_from_file(self):
         options = QtWidgets.QFileDialog.Options()
+        start_dir = self.main_app.cfg.get('last_match_points_dir', '')
         fileName, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load Match Points", "", "Text Files (*.txt)", options=options)
+            self, "Load Match Points", start_dir, "Text Files (*.txt)", options=options)
         if not fileName:
             return
+        self.main_app._persist_session_pref('last_match_points_dir', os.path.dirname(fileName))
         try:
             with open(fileName, "r") as f:
                 lines = f.readlines()
@@ -463,19 +501,13 @@ class RegistrationDialog(QtWidgets.QDialog):
                 self.table_matrix.setItem(i, j, item)
 
     def calculate_registration(self):
-        # Validate numeric fields before doing work
-        for name, field in [("su", self.in_su), ("sv", self.in_sv), ("sz", self.in_sz), ("Pixel Size", self.in_px)]:
-            try:
-                float(field.text())
-            except ValueError:
-                QtWidgets.QMessageBox.warning(self, "Input Error", f"'{name}' must be a valid number.")
-                return
+        # Spinboxes guarantee numeric values — no validation try/except.
         try:
             pre_px = self.main_app.cfg["prescan_pixel_size_xy"]
-            su = float(self.in_su.text())
-            sv = float(self.in_sv.text())
-            sz = float(self.in_sz.text())
-            self.ref_px = float(self.in_px.text())
+            su = self.in_su.value()
+            sv = self.in_sv.value()
+            sz = self.in_sz.value()
+            self.ref_px = self.in_px.value()
 
             pre_pts, ref_pts_raw = self.get_points()
             if len(pre_pts) < 3:
@@ -486,10 +518,7 @@ class RegistrationDialog(QtWidgets.QDialog):
 
             # If motor coordinate mode, convert su/sv/sz → refscan pixels
             if self.combo_match_mode.currentIndex() == 1:
-                try:
-                    final_px = float(self.in_final_px.text())
-                except ValueError:
-                    final_px = 100.0
+                final_px = self.in_final_px.value()
                 tmp_vreg = VolumeRegistration(pre_px, optics=optics)
                 tmp_vreg.addReferenceVolume(su, sv, sz, self.ref_px)
                 motor_arr = np.array(ref_pts_raw)
@@ -601,6 +630,92 @@ class RegistrationDialog(QtWidgets.QDialog):
             else: item_err.setBackground(QtGui.QColor(255, 150, 150))
             self.table_results.setItem(i, 3, item_err)
 
+        # Motor coords + limits column. Driven by the active set of cylinder
+        # placements so the user sees overruns at registration time, not at
+        # save time.
+        self._update_motor_warnings(active_res)
+
+    def _compute_motor_warnings(self, active_vreg):
+        """Return (su, sv, sz arrays, list of overrun strings) for the
+        currently active cylinder set.
+
+        Returns (None, None, None, []) if the active set is empty.
+        """
+        pts = self.main_app.apply_output_flips(self.main_app.get_all_active_points())
+        if len(pts) == 0:
+            return None, None, None, []
+        XYZcoords_refscan = active_vreg.transformToRefscan(pts)
+        final_px = self.in_final_px.value()
+        su, sv, sz = active_vreg.refscan_to_motors(XYZcoords_refscan, final_px)
+        limits = self.main_app.cfg.get('motor_limits', {})
+        warnings = []
+        for axis_name, values in [("su", su), ("sv", sv), ("sz", sz)]:
+            lim = limits.get(axis_name)
+            if lim is None:
+                continue
+            lo, hi = lim
+            for i, v in enumerate(values):
+                if v < lo or v > hi:
+                    warnings.append((i, axis_name, float(v), float(lo), float(hi)))
+        return su, sv, sz, warnings
+
+    def _update_motor_warnings(self, active_res):
+        """Populate the motor column of the results table and the summary
+        label below it. Out-of-range cells are tinted red."""
+        idx = self.combo_result_select.currentIndex()
+        active_vreg = self.vreg_svd if idx == 0 else self.vreg_opt
+        if active_vreg is None:
+            self.lbl_motor_warn.setText("Motor limits: registration not computed yet")
+            self.lbl_motor_warn.setStyleSheet("font-weight: bold; padding: 4px; color: #777;")
+            return
+
+        try:
+            su, sv, sz, warnings = self._compute_motor_warnings(active_vreg)
+        except Exception as e:
+            self.lbl_motor_warn.setText(f"Motor limits: error computing ({e})")
+            self.lbl_motor_warn.setStyleSheet("font-weight: bold; padding: 4px; color: #b00;")
+            return
+
+        if su is None:
+            self.lbl_motor_warn.setText("Motor limits: no active cylinders")
+            self.lbl_motor_warn.setStyleSheet("font-weight: bold; padding: 4px; color: #777;")
+            return
+
+        bad_indices = {(i, axis) for i, axis, *_ in warnings}
+        n_active = len(su)
+        # Per-row motor column. Match-points table rows correspond to the
+        # match-point set, not the active-cylinder set, so we render motor
+        # info only when the row index lines up.
+        for i in range(self.table_results.rowCount()):
+            if i < n_active:
+                txt = f"({su[i]:+.4f}, {sv[i]:+.4f}, {sz[i]:+.4f}) mm"
+                item = QtWidgets.QTableWidgetItem(txt)
+                row_bad = any((i, ax) in bad_indices for ax in ("su", "sv", "sz"))
+                if row_bad:
+                    item.setBackground(QtGui.QColor(255, 150, 150))
+                    bad_axes = [ax for ax in ("su", "sv", "sz") if (i, ax) in bad_indices]
+                    item.setToolTip("Out of range: " + ", ".join(bad_axes))
+                else:
+                    item.setBackground(QtGui.QColor(220, 255, 220))
+                self.table_results.setItem(i, 4, item)
+            else:
+                self.table_results.setItem(i, 4, QtWidgets.QTableWidgetItem("\u2014"))
+
+        if warnings:
+            self.lbl_motor_warn.setText(
+                f"Motor limits: {len({i for i,_,*_ in warnings})} of {n_active} cylinder(s) out of range"
+            )
+            self.lbl_motor_warn.setStyleSheet(
+                "font-weight: bold; padding: 4px; "
+                "background-color: #fbe5e5; color: #a40000; border: 1px solid #a40000;"
+            )
+        else:
+            self.lbl_motor_warn.setText(f"Motor limits: all {n_active} cylinder(s) within range")
+            self.lbl_motor_warn.setStyleSheet(
+                "font-weight: bold; padding: 4px; "
+                "background-color: #e3f7e3; color: #176317; border: 1px solid #176317;"
+            )
+
     def save_machine_file(self):
         idx = self.combo_result_select.currentIndex()
         if idx == -1 or not self.vreg_svd:
@@ -616,33 +731,31 @@ class RegistrationDialog(QtWidgets.QDialog):
             return
 
         try:
-            XYZcoords_refscan = active_vreg.transformToRefscan(pts)
-            try: final_px = float(self.in_final_px.text())
-            except ValueError: final_px = 100.0
-
-            su, sv, sz = active_vreg.refscan_to_motors(XYZcoords_refscan, final_px)
-
-            # Check motor limits
-            limits = self.main_app.cfg.get('motor_limits', {})
-            warnings = []
-            for axis_name, values in [("su", su), ("sv", sv), ("sz", sz)]:
-                lim = limits.get(axis_name)
-                if lim is None:
-                    continue
-                lo, hi = lim
-                for i, v in enumerate(values):
-                    if v < lo or v > hi:
-                        warnings.append(f"  Cylinder {i}: {axis_name} = {v:.4f} mm (limits: [{lo}, {hi}])")
+            su, sv, sz, warnings = self._compute_motor_warnings(active_vreg)
+            if su is None:
+                QtWidgets.QMessageBox.warning(self, "Error", "No active cylinders.")
+                return
             if warnings:
-                msg = f"{len(warnings)} cylinder(s) exceed motor travel limits:\n\n" + "\n".join(warnings)
+                lines = [
+                    f"  Cylinder {i}: {axis} = {v:.4f} mm (limits: [{lo}, {hi}])"
+                    for i, axis, v, lo, hi in warnings
+                ]
+                msg = (
+                    f"{len(warnings)} cylinder(s) exceed motor travel limits "
+                    f"(also shown in red in the Per-Point Analysis table):\n\n"
+                    + "\n".join(lines)
+                )
                 QtWidgets.QMessageBox.warning(self, "Motor Limit Warning", msg)
 
             df = pd.DataFrame(np.array([su, sv, sz]).T, columns=["#su", "sv", "sz"])
 
             options = QtWidgets.QFileDialog.Options()
-            fileName, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Machine Coordinates", "tiles_motor_coords.txt", "Text Files (*.txt)", options=options)
+            start_dir = self.main_app.cfg.get('last_machine_save_dir', '')
+            seed = os.path.join(start_dir, "tiles_motor_coords.txt") if start_dir else "tiles_motor_coords.txt"
+            fileName, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Machine Coordinates", seed, "Text Files (*.txt)", options=options)
 
             if fileName:
+                self.main_app._persist_session_pref('last_machine_save_dir', os.path.dirname(fileName))
                 df.to_csv(fileName, sep=" ", index=False, float_format="%.04f")
                 fiji_filename = os.path.splitext(fileName)[0] + "_fiji.txt"
                 fiji_df = pd.DataFrame(pts, columns=["x", "y", "z"])
@@ -667,9 +780,19 @@ class RegistrationDialog(QtWidgets.QDialog):
 
 
 class CylinderApp(QtWidgets.QMainWindow):
-    def __init__(self, config, vol_grid, clim):
+    def __init__(self, config, vol_grid, clim, config_path=None):
         super().__init__()
         self.cfg = config
+        self.config_path = config_path
+
+        # Keys persisted incidentally (last-used file dialog dirs, etc.).
+        # Call _persist_session_pref('key', value) to save & flush.
+        self._session_pref_keys = (
+            'last_nml_load_dir',
+            'last_nml_save_dir',
+            'last_machine_save_dir',
+            'last_match_points_dir',
+        )
         self.rois = [r.copy() for r in config.get('rois', [])]
         self.vol_grid = vol_grid
         self.clim = clim
@@ -689,6 +812,14 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.line_points = np.empty((0,3))
         self.line_density = 1.0
         self.active_line_cyl_mask = np.empty((0,), dtype=bool)
+
+        # Single-slot undo stash per category. Each holds the most recent
+        # set of items deleted by the corresponding "Delete Selected" action,
+        # restorable via the matching "Restore last deleted" button. Cleared
+        # on next mutation that isn't a restore.
+        self._stash_rois = None       # list[(roi_dict)] | None
+        self._stash_lines = None      # list[(line_tuple, active_bool)] | None
+        self._stash_manual = None     # list[(np.array(3,), active_bool)] | None
 
         self.dims_std = (10,10)
         self.dims_exp = (10,10)
@@ -832,14 +963,19 @@ class CylinderApp(QtWidgets.QMainWindow):
         lo.setSpacing(5)
 
         h = QtWidgets.QHBoxLayout()
-        self.txt_res = QtWidgets.QLineEdit(str(self.current_scan_res))
-        lbl_res = QtWidgets.QLabel("Scan Px (nm):")
+        self.spin_res = QtWidgets.QDoubleSpinBox()
+        self.spin_res.setRange(0.01, 100000.0)
+        self.spin_res.setDecimals(2)
+        self.spin_res.setValue(float(self.current_scan_res))
+        self.spin_res.setSuffix(" nm")
+        # editingFinished fires once on commit (Enter or focus-out), so
+        # solve_global_union doesn't thrash mid-typing the way valueChanged
+        # would.
+        self.spin_res.editingFinished.connect(self.update_resolution)
+        lbl_res = QtWidgets.QLabel("Scan Px:")
         lbl_res.setStyleSheet("font-weight: bold;")
         h.addWidget(lbl_res)
-        h.addWidget(self.txt_res)
-        btn = QtWidgets.QPushButton("Update")
-        btn.clicked.connect(self.update_resolution)
-        h.addWidget(btn)
+        h.addWidget(self.spin_res)
         lo.addLayout(h)
 
         self.combo_mode = QtWidgets.QComboBox()
@@ -928,10 +1064,12 @@ class CylinderApp(QtWidgets.QMainWindow):
         lo.setContentsMargins(10, 5, 10, 5)
         lo.setSpacing(2)
         h = QtWidgets.QHBoxLayout()
-        self.txt_step = QtWidgets.QLineEdit("10")
-        self.txt_step.setFixedWidth(50)
+        self.spin_step = QtWidgets.QSpinBox()
+        self.spin_step.setRange(1, 100000)
+        self.spin_step.setValue(10)
+        self.spin_step.setSuffix(" px")
         h.addWidget(QtWidgets.QLabel("Step:"))
-        h.addWidget(self.txt_step)
+        h.addWidget(self.spin_step)
         h.addStretch()
         self.lbl_offset = QtWidgets.QLabel("[0,0,0]")
         h.addWidget(self.lbl_offset)
@@ -947,9 +1085,9 @@ class CylinderApp(QtWidgets.QMainWindow):
             hx.addWidget(bp)
             lo.addLayout(hx)
 
-        br = QtWidgets.QPushButton("Reset Shift")
-        br.clicked.connect(self.reset_rois)
-        lo.addWidget(br)
+        self.btn_reset_shift = QtWidgets.QPushButton("Reset Shift")
+        self.btn_reset_shift.clicked.connect(self.reset_rois)
+        lo.addWidget(self.btn_reset_shift)
         return widget
 
     def _create_roi_group(self):
@@ -975,10 +1113,19 @@ class CylinderApp(QtWidgets.QMainWindow):
         h.addWidget(badd)
         lo.addLayout(h)
 
-        bdel = QtWidgets.QPushButton("Delete Selected")
-        bdel.clicked.connect(self.delete_selected_rois)
-        lo.addWidget(bdel)
+        h_del = QtWidgets.QHBoxLayout()
+        self.btn_del_rois = QtWidgets.QPushButton("Delete Selected")
+        self.btn_del_rois.setEnabled(False)
+        self.btn_del_rois.clicked.connect(self.delete_selected_rois)
+        self.btn_restore_rois = QtWidgets.QPushButton("Restore last deleted")
+        self.btn_restore_rois.setEnabled(False)
+        self.btn_restore_rois.clicked.connect(self.restore_last_deleted_rois)
+        h_del.addWidget(self.btn_del_rois)
+        h_del.addWidget(self.btn_restore_rois)
+        lo.addLayout(h_del)
         grp.setLayout(lo)
+        # Update gating when selection or list contents change.
+        self.roi_list_widget.itemSelectionChanged.connect(self._update_action_states)
         return grp
 
     def _create_line_content(self):
@@ -1041,9 +1188,17 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.line_list_widget.itemDoubleClicked.connect(self._on_line_double_clicked)
         lo.addWidget(self.line_list_widget)
 
-        b_del = QtWidgets.QPushButton("Delete Selected")
-        b_del.clicked.connect(self.delete_selected_lines)
-        lo.addWidget(b_del)
+        h_del = QtWidgets.QHBoxLayout()
+        self.btn_del_lines = QtWidgets.QPushButton("Delete Selected")
+        self.btn_del_lines.setEnabled(False)
+        self.btn_del_lines.clicked.connect(self.delete_selected_lines)
+        self.btn_restore_lines = QtWidgets.QPushButton("Restore last deleted")
+        self.btn_restore_lines.setEnabled(False)
+        self.btn_restore_lines.clicked.connect(self.restore_last_deleted_lines)
+        h_del.addWidget(self.btn_del_lines)
+        h_del.addWidget(self.btn_restore_lines)
+        lo.addLayout(h_del)
+        self.line_list_widget.itemSelectionChanged.connect(self._update_action_states)
         return widget
 
     def add_line_from_text(self):
@@ -1069,9 +1224,29 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.recalculate_line_points()
 
     def delete_selected_lines(self):
-        for i in sorted([item.row() for item in self.line_list_widget.selectedIndexes()], reverse=True):
+        rows = sorted({item.row() for item in self.line_list_widget.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        deleted = []
+        for i in rows:
+            deleted.append((self.lines[i], bool(self.active_line_mask[i])))
             del self.lines[i]
             del self.active_line_mask[i]
+        self._stash_lines = list(deleted)
+        if hasattr(self, 'btn_restore_lines'):
+            self.btn_restore_lines.setEnabled(True)
+        self.refresh_line_list()
+        self.recalculate_line_points()
+
+    def restore_last_deleted_lines(self):
+        if not self._stash_lines:
+            return
+        for line, active in reversed(self._stash_lines):
+            self.lines.append(line)
+            self.active_line_mask.append(active)
+        self._stash_lines = None
+        if hasattr(self, 'btn_restore_lines'):
+            self.btn_restore_lines.setEnabled(False)
         self.refresh_line_list()
         self.recalculate_line_points()
 
@@ -1087,6 +1262,7 @@ class CylinderApp(QtWidgets.QMainWindow):
             item.setCheckState(QtCore.Qt.Checked if self.active_line_mask[i] else QtCore.Qt.Unchecked)
             self.line_list_widget.addItem(item)
         self.line_list_widget.blockSignals(False)
+        self._update_action_states()
 
     def on_line_item_changed(self, item):
         self.active_line_mask[self.line_list_widget.row(item)] = (item.checkState() == QtCore.Qt.Checked)
@@ -1156,6 +1332,11 @@ class CylinderApp(QtWidgets.QMainWindow):
         grp = QtWidgets.QGroupBox("Cylinders (Auto / Line / Manual)")
         lo = QtWidgets.QVBoxLayout()
 
+        self.lbl_cyl_dims = QtWidgets.QLabel("Cylinder ⌀ × H: —")
+        self.lbl_cyl_dims.setStyleSheet("color: #555; font-size: 10pt;")
+        self.lbl_cyl_dims.setWordWrap(True)
+        lo.addWidget(self.lbl_cyl_dims)
+
         self.cyl_list_widget = QtWidgets.QListWidget()
         self.cyl_list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.cyl_list_widget.itemChanged.connect(self.on_combined_item_changed)
@@ -1166,12 +1347,18 @@ class CylinderApp(QtWidgets.QMainWindow):
         ba.clicked.connect(lambda: self.set_all_cyls(True))
         bn = QtWidgets.QPushButton("None")
         bn.clicked.connect(lambda: self.set_all_cyls(False))
-        b_del = QtWidgets.QPushButton("Delete Selected (Manual)")
-        b_del.clicked.connect(self.delete_selected_combined)
+        self.btn_del_manual = QtWidgets.QPushButton("Delete Selected (Manual)")
+        self.btn_del_manual.setEnabled(False)
+        self.btn_del_manual.clicked.connect(self.delete_selected_combined)
+        self.btn_restore_manual = QtWidgets.QPushButton("Restore last deleted")
+        self.btn_restore_manual.setEnabled(False)
+        self.btn_restore_manual.clicked.connect(self.restore_last_deleted_manual)
         h.addWidget(ba)
         h.addWidget(bn)
-        h.addWidget(b_del)
+        h.addWidget(self.btn_del_manual)
+        h.addWidget(self.btn_restore_manual)
         lo.addLayout(h)
+        self.cyl_list_widget.itemSelectionChanged.connect(self._update_action_states)
         grp.setLayout(lo)
         return grp
 
@@ -1179,20 +1366,20 @@ class CylinderApp(QtWidgets.QMainWindow):
         grp = QtWidgets.QGroupBox("Export & Registration")
         lo = QtWidgets.QVBoxLayout()
 
-        be_nml = QtWidgets.QPushButton("EXPORT NML (TILES)")
-        be_nml.clicked.connect(self.export_nml_tiles)
-        be_nml.setStyleSheet("background-color: #f0ad4e; color: white;")
-        lo.addWidget(be_nml)
+        self.btn_export_nml = QtWidgets.QPushButton("EXPORT NML (TILES)")
+        self.btn_export_nml.clicked.connect(self.export_nml_tiles)
+        self.btn_export_nml.setStyleSheet("background-color: #f0ad4e; color: white;")
+        lo.addWidget(self.btn_export_nml)
 
-        be = QtWidgets.QPushButton("PRINT CONSOLE")
-        be.clicked.connect(self.export_coordinates)
-        be.setStyleSheet("background-color: blue; color: white;")
-        lo.addWidget(be)
+        self.btn_print_console = QtWidgets.QPushButton("PRINT CONSOLE")
+        self.btn_print_console.clicked.connect(self.export_coordinates)
+        self.btn_print_console.setStyleSheet("background-color: blue; color: white;")
+        lo.addWidget(self.btn_print_console)
 
-        breg = QtWidgets.QPushButton("REGISTER COORDINATES")
-        breg.clicked.connect(self.open_registration_dialog)
-        breg.setStyleSheet("background-color: purple; color: white; font-weight: bold; padding: 10px;")
-        lo.addWidget(breg)
+        self.btn_register = QtWidgets.QPushButton("REGISTER COORDINATES")
+        self.btn_register.clicked.connect(self.open_registration_dialog)
+        self.btn_register.setStyleSheet("background-color: purple; color: white; font-weight: bold; padding: 10px;")
+        lo.addWidget(self.btn_register)
 
         grp.setLayout(lo)
         return grp
@@ -1259,8 +1446,11 @@ class CylinderApp(QtWidgets.QMainWindow):
             return
 
         options = QtWidgets.QFileDialog.Options()
-        fileName, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save NML Tiles", "tiles.nml", "NML Files (*.nml)", options=options)
+        start_dir = self.cfg.get('last_nml_save_dir', '')
+        seed = os.path.join(start_dir, "tiles.nml") if start_dir else "tiles.nml"
+        fileName, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save NML Tiles", seed, "NML Files (*.nml)", options=options)
         if fileName:
+            self._persist_session_pref('last_nml_save_dir', os.path.dirname(fileName))
             base, ext = os.path.splitext(fileName)
             D_std, H_std = self.dims_std
             generate_nml(base + "_std" + ext, pts, D_std, H_std, color_hex="#00FFFF")
@@ -1322,13 +1512,15 @@ class CylinderApp(QtWidgets.QMainWindow):
 
     def open_registration_dialog(self):
         self.reg_dialog = RegistrationDialog(self)
-        self.reg_dialog.in_final_px.setText(str(self.current_scan_res))
+        self.reg_dialog.in_final_px.setValue(float(self.current_scan_res))
         self.reg_dialog.show()
 
     def load_nml_dialog(self):
         options = QtWidgets.QFileDialog.Options()
-        fileName, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open NML", "", "NML (*.nml)", options=options)
+        start_dir = self.cfg.get('last_nml_load_dir', '')
+        fileName, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open NML", start_dir, "NML (*.nml)", options=options)
         if fileName:
+            self._persist_session_pref('last_nml_load_dir', os.path.dirname(fileName))
             new = parse_nml(fileName)
             if new:
                 self.rois = new
@@ -1336,14 +1528,13 @@ class CylinderApp(QtWidgets.QMainWindow):
                 self.recalculate_points()
 
     def update_resolution(self):
-        try:
-            self.current_scan_res = float(self.txt_res.text())
+        new_res = float(self.spin_res.value())
+        if new_res != self.current_scan_res:
+            self.current_scan_res = new_res
             self.recalculate_points()
-        except ValueError: pass
 
     def nudge_rois(self, ax, d):
-        try: s = int(self.txt_step.text())
-        except ValueError: s = 10
+        s = self.spin_step.value()
         delta = s * d
 
         for r in self.rois:
@@ -1371,6 +1562,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.roi_list_widget.clear()
         for i, r in enumerate(self.rois):
             self.roi_list_widget.addItem(f"Box {i}: {list(r.values())}")
+        self._update_action_states()
 
     def _on_roi_double_clicked(self, item):
         i = self.roi_list_widget.row(item)
@@ -1393,8 +1585,29 @@ class CylinderApp(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Bad ROI format. Expected: x,y,z,w,h,d", 5000)
 
     def delete_selected_rois(self):
-        for i in sorted([item.row() for item in self.roi_list_widget.selectedIndexes()], reverse=True):
+        rows = sorted({item.row() for item in self.roi_list_widget.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        deleted = []
+        for i in rows:
+            deleted.append(dict(self.rois[i]))
             del self.rois[i]
+        # Push to stash for restore (most-recent-first within the batch).
+        self._stash_rois = list(deleted)
+        if hasattr(self, 'btn_restore_rois'):
+            self.btn_restore_rois.setEnabled(True)
+        self.refresh_roi_list()
+        self.recalculate_points()
+
+    def restore_last_deleted_rois(self):
+        if not self._stash_rois:
+            return
+        # Append back at the end; positional ordering after restore isn't
+        # critical because solve_global_union doesn't depend on it.
+        self.rois.extend(reversed(self._stash_rois))
+        self._stash_rois = None
+        if hasattr(self, 'btn_restore_rois'):
+            self.btn_restore_rois.setEnabled(False)
         self.refresh_roi_list()
         self.recalculate_points()
 
@@ -1414,8 +1627,76 @@ class CylinderApp(QtWidgets.QMainWindow):
         new_count = len(self.all_points)
         if new_count != old_count or len(self.active_mask) != new_count:
             self.active_mask = np.ones(new_count, dtype=bool)
+        self._update_cyl_dims_label()
         self.refresh_cyl_list()
         self.update_3d_scene()
+        self._update_action_states()
+
+    def _update_action_states(self):
+        """Drive enabled/disabled state of action buttons from current data.
+
+        Called from recalculate_points / refresh_cyl_list / list selection
+        changes. Centralizes the gating logic so failure modes are visible
+        as greyed-out buttons rather than post-click warnings.
+        """
+        # Export / Print: need at least one active cylinder anywhere.
+        try:
+            n_active = len(self.get_all_active_points())
+        except Exception:
+            n_active = 0
+        if hasattr(self, 'btn_export_nml'):
+            self.btn_export_nml.setEnabled(n_active > 0)
+        if hasattr(self, 'btn_print_console'):
+            self.btn_print_console.setEnabled(n_active > 0)
+        if hasattr(self, 'btn_register'):
+            # Registration always opens; the dialog itself gates Calculate.
+            self.btn_register.setEnabled(n_active > 0)
+
+        # Reset Shift: only when a shift has been applied.
+        if hasattr(self, 'btn_reset_shift'):
+            self.btn_reset_shift.setEnabled(self.total_roi_shift != [0, 0, 0])
+
+        # Delete Selected (ROI/Line/Manual): need a selection of the right kind.
+        if hasattr(self, 'btn_del_rois'):
+            self.btn_del_rois.setEnabled(
+                len(self.roi_list_widget.selectedIndexes()) > 0
+            )
+        if hasattr(self, 'btn_del_lines'):
+            self.btn_del_lines.setEnabled(
+                len(self.line_list_widget.selectedIndexes()) > 0
+            )
+        if hasattr(self, 'btn_del_manual'):
+            has_manual_sel = any(
+                (item.data(QtCore.Qt.UserRole) or (None,))[0] == 'manual'
+                for item in self.cyl_list_widget.selectedItems()
+            )
+            self.btn_del_manual.setEnabled(has_manual_sel)
+
+    def _persist_session_pref(self, key, value):
+        """Set *key* on self.cfg and write back to the user config file."""
+        self.cfg[key] = value
+        if self.config_path:
+            update_user_config_keys(self.config_path, {key: value})
+
+    def _update_cyl_dims_label(self):
+        if not hasattr(self, 'lbl_cyl_dims'):
+            return
+        d_std, h_std = self.dims_std
+        d_exp, h_exp = self.dims_exp
+        px_xy = float(self.cfg.get('prescan_pixel_size_xy', 0))
+        px_z = float(self.cfg.get('prescan_z_step', 0))
+        if px_xy <= 0 or px_z <= 0 or d_std <= 0:
+            self.lbl_cyl_dims.setText("Cylinder ⌀ × H: —")
+            return
+        # Convert prescan-pixel dims to micrometers.
+        d_std_um = d_std * px_xy / 1000.0
+        h_std_um = h_std * px_z / 1000.0
+        d_exp_um = d_exp * px_xy / 1000.0
+        h_exp_um = h_exp * px_z / 1000.0
+        self.lbl_cyl_dims.setText(
+            f"Cylinder ⌀ × H:  std {d_std_um:.1f} × {h_std_um:.1f} µm   "
+            f"exp {d_exp_um:.1f} × {h_exp_um:.1f} µm"
+        )
 
     SECTION_BG = QtGui.QColor(60, 60, 70)
     SECTION_FG = QtGui.QColor(255, 255, 255)
@@ -1449,9 +1730,12 @@ class CylinderApp(QtWidgets.QMainWindow):
         n_auto = len(self.all_points)
         auto_states = [bool(self.active_mask[i]) if i < len(self.active_mask) else True
                        for i in range(n_auto)]
+        auto_active = sum(auto_states)
         auto_all = bool(n_auto) and all(auto_states)
         self.cyl_list_widget.addItem(
-            self._make_section_header(f"Auto from BBoxes ({n_auto})", auto_all, 'auto')
+            self._make_section_header(
+                f"Auto from BBoxes — {auto_active} / {n_auto} active", auto_all, 'auto'
+            )
         )
         seq = 0
         for i, p in enumerate(self.all_points):
@@ -1468,9 +1752,12 @@ class CylinderApp(QtWidgets.QMainWindow):
                      or self.chk_show_lines.isChecked())
         line_states = [bool(self.active_line_cyl_mask[i]) if i < len(self.active_line_cyl_mask) else True
                        for i in range(n_line)]
+        line_active = sum(s and line_show for s in line_states)
         line_all = line_show and bool(n_line) and all(line_states)
         self.cyl_list_widget.addItem(
-            self._make_section_header(f"Line Coverage ({n_line})", line_all, 'line')
+            self._make_section_header(
+                f"Line Coverage — {line_active} / {n_line} active", line_all, 'line'
+            )
         )
         seq = 0
         for i, p in enumerate(self.line_points):
@@ -1485,9 +1772,12 @@ class CylinderApp(QtWidgets.QMainWindow):
         n_man = len(self.manual_points)
         man_show = self.chk_show_manual.isChecked() if hasattr(self, 'chk_show_manual') else True
         man_states = [bool(self.active_manual_mask[i]) for i in range(n_man)]
+        man_active = sum(s and man_show for s in man_states)
         man_all = man_show and bool(n_man) and all(man_states)
         self.cyl_list_widget.addItem(
-            self._make_section_header(f"Manual ({n_man})", man_all, 'manual')
+            self._make_section_header(
+                f"Manual — {man_active} / {n_man} active", man_all, 'manual'
+            )
         )
         seq = 0
         for i, p in enumerate(self.manual_points):
@@ -1500,6 +1790,7 @@ class CylinderApp(QtWidgets.QMainWindow):
                 seq += 1
 
         self.cyl_list_widget.blockSignals(False)
+        self._update_action_states()
 
     def on_combined_item_changed(self, item):
         data = item.data(QtCore.Qt.UserRole)
@@ -1570,10 +1861,28 @@ class CylinderApp(QtWidgets.QMainWindow):
                 5000,
             )
             return
+        deleted = []
         for i in sorted(set(manual_indices), reverse=True):
             if 0 <= i < len(self.manual_points):
+                deleted.append((np.array(self.manual_points[i], copy=True),
+                                bool(self.active_manual_mask[i])))
                 del self.manual_points[i]
                 del self.active_manual_mask[i]
+        self._stash_manual = list(deleted)
+        if hasattr(self, 'btn_restore_manual'):
+            self.btn_restore_manual.setEnabled(bool(deleted))
+        self.refresh_cyl_list()
+        self.update_3d_scene()
+
+    def restore_last_deleted_manual(self):
+        if not self._stash_manual:
+            return
+        for pt, active in reversed(self._stash_manual):
+            self.manual_points.append(pt)
+            self.active_manual_mask.append(active)
+        self._stash_manual = None
+        if hasattr(self, 'btn_restore_manual'):
+            self.btn_restore_manual.setEnabled(False)
         self.refresh_cyl_list()
         self.update_3d_scene()
 
