@@ -1,0 +1,75 @@
+BootStrap: docker
+From: mirror.gcr.io/library/ubuntu:24.04
+
+%environment
+    # Qt/VTK rendering via X11 (NICE/NoMachine on the cluster)
+    export QT_QPA_PLATFORM=xcb
+    export PYVISTA_OFF_SCREEN=false
+    # Disable the D-Bus session bus — scan_plan doesn't need it and the
+    # container may not have a valid /etc/machine-id at runtime once
+    # Apptainer bind-mounts the host's. Without this, PyQt5/QtDBus
+    # crashes at startup with "No machine-id" / dbus connection errors.
+    export DBUS_SESSION_BUS_ADDRESS=disabled:
+
+%files
+
+%post
+    ### General packages
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -y update
+    apt-get -y full-upgrade
+    apt-get -y install --no-install-recommends ca-certificates
+    apt-get -y install --no-install-recommends python3 python3-pip python-is-python3 git \
+        libgl1 \
+        libegl1 \
+        libgles2 \
+        libglx-mesa0 \
+        libxrender1 \
+        libxkbcommon-x11-0 \
+        libxcb-xinerama0 \
+        libxcb-icccm4 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-randr0 \
+        libxcb-render-util0 \
+        libxcb-shape0 \
+        libxcb-cursor0 \
+        libxcb-xfixes0 \
+        libfontconfig1 \
+        libdbus-1-3 \
+        libglib2.0-0 \
+        libx11-xcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxi6 \
+        libxtst6 \
+        libxrandr2 \
+
+
+    mkdir sources && cd sources
+
+    # NOTE: the deploy token below is project-specific. Prefer wiring it
+    # through GitLab CI variables (e.g. $CI_DEPLOY_USER / $CI_DEPLOY_PASSWORD
+    # or a job-level CI/CD variable) rather than committing it inline.
+    git clone https://gitlab+deploy-token-28:gldt-at9GF_6Z5LmqjbMuHh1a@gitlab.esrf.fr/artem1706/scan_plan.git scan_plan.git
+
+    pip install --break-system-packages ./scan_plan.git
+
+    apt remove --purge -y git
+    apt autoremove -y --purge
+    apt autoclean -y
+
+    # D-Bus / Qt expects a machine-id; generate one at build time so the
+    # container has a valid value baked in. Apptainer may still bind-mount
+    # the host's /etc/machine-id over this at runtime — the
+    # DBUS_SESSION_BUS_ADDRESS=disabled: env in %environment is the
+    # runtime fallback that makes scan_plan tolerant either way.
+    cat /proc/sys/kernel/random/uuid | tr -d '-' > /etc/machine-id
+    mkdir -p /var/lib/dbus
+    cp /etc/machine-id /var/lib/dbus/machine-id
+
+%runscript
+    exec scan-plan $@
+
+%labels
+    Author William Chevremont (william.chevremont@esrf.fr)

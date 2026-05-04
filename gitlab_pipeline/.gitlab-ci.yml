@@ -1,0 +1,15 @@
+include:
+  - project: 'apptainer/admin/templates'
+    file: '.gitlab-ci-template.yml'
+
+variables:
+  CVMFS_PROJECT_VERSION: "1.0"
+
+build-apptainer-image:
+  extends: .build-apptainer-image
+
+deploy-apptainer-images:
+  extends: .deploy-apptainer-images
+  variables:
+    EXPOSED_COMMANDS: |
+      scan-plan:scan-plan
