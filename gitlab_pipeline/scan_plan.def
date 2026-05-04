@@ -16,7 +16,34 @@ From: mirror.gcr.io/library/ubuntu:24.04
 %post
     ### General packages
     export DEBIAN_FRONTEND=noninteractive
-    apt-get -y update
+
+    # Make apt resilient to flaky Ubuntu mirrors. The ESRF CI has been
+    # observed hitting 502/503 from archive.ubuntu.com / security.ubuntu.com
+    # mid-build, which leaves the package index incomplete and downstream
+    # `apt-get install` calls fail with "Package X has no installation
+    # candidate". These two settings teach apt itself to retry, and the
+    # explicit loop around `apt-get update` retries the whole index fetch.
+    mkdir -p /etc/apt/apt.conf.d
+    cat > /etc/apt/apt.conf.d/99retries <<'EOF'
+Acquire::Retries "5";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+EOF
+
+    apt_update_with_retry() {
+        local i
+        for i in 1 2 3 4 5; do
+            if apt-get -y update; then
+                return 0
+            fi
+            echo "apt-get update failed (attempt $i), retrying in 15s..."
+            sleep 15
+        done
+        echo "apt-get update failed after 5 attempts" >&2
+        return 1
+    }
+    apt_update_with_retry
+
     apt-get -y full-upgrade
     apt-get -y install --no-install-recommends ca-certificates
     apt-get -y install --no-install-recommends python3 python3-pip python-is-python3 git \

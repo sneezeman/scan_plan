@@ -25,6 +25,20 @@ host's `/etc/machine-id` over the container's, which can be empty.
 2. End of `%post` generates a machine-id at build time
    (`/etc/machine-id` + `/var/lib/dbus/machine-id`) so the container has
    a valid one baked in even before the env-var fallback kicks in.
+3. `apt` is configured to retry transient failures
+   (`/etc/apt/apt.conf.d/99retries`) and `apt-get update` itself is
+   wrapped in a 5-attempt retry loop. This is needed because the ESRF CI
+   has hit 502/503 errors from `archive.ubuntu.com` /
+   `security.ubuntu.com` mid-build, which left the package index
+   incomplete and caused `Package 'ca-certificates' has no installation
+   candidate` failures.
+
+## Filename note
+
+The CI deploy repo (`apptainer/scan_planner`) uses the filename
+`scan_planner.def`, while this reference copy is named `scan_plan.def`
+to match the Python project's own naming. Rename when copying into the
+CI deploy repo.
 
 ## Deployment
 
