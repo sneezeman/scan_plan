@@ -889,9 +889,18 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.plotter = QtInteractor(self)
         self.plotter.set_background("black")
         # White, bold X/Y/Z labels with shadow so they're readable on both
-        # dark volumes and bright slices. (No native VTK outline; shadow
-        # is the closest available approximation.)
-        axes_marker = self.plotter.add_axes()
+        # dark volumes and bright slices. We pass the per-axis colors via
+        # add_axes() *and* override the caption text properties because
+        # different pyvista versions honor only one of these paths.
+        try:
+            axes_marker = self.plotter.add_axes(
+                line_width=3,
+                x_color="white", y_color="white", z_color="white",
+                xlabel="X", ylabel="Y", zlabel="Z",
+            )
+        except TypeError:
+            # Older pyvista signatures don't accept x_color/y_color/z_color.
+            axes_marker = self.plotter.add_axes(line_width=3)
         try:
             ax_actor = axes_marker.GetOrientationMarker()
             for caption in (ax_actor.GetXAxisCaptionActor2D(),
@@ -900,8 +909,15 @@ class CylinderApp(QtWidgets.QMainWindow):
                 tp = caption.GetCaptionTextProperty()
                 tp.SetColor(1.0, 1.0, 1.0)
                 tp.SetBold(1)
+                tp.SetItalic(0)
                 tp.SetShadow(1)
-                tp.SetFontSize(14)
+                tp.SetShadowOffset(2, -2)
+                tp.SetFontSize(16)
+                # Some VTK builds hide labels until BackgroundOpacity > 0.
+                tp.SetBackgroundColor(0.0, 0.0, 0.0)
+                tp.SetBackgroundOpacity(0.0)
+                # Force the caption to redraw with the new properties.
+                caption.SetCaption(caption.GetCaption())
         except Exception:
             pass
         # Depth peeling lets opaque/translucent geometry composite correctly
@@ -1020,6 +1036,19 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.combo_render.currentTextChanged.connect(self.update_volume_render_mode)
         h_rend.addWidget(self.combo_render)
         lo.addLayout(h_rend)
+
+        h_invert = QtWidgets.QHBoxLayout()
+        self.chk_invert_volume = QtWidgets.QCheckBox("Invert Volume")
+        self.chk_invert_volume.setToolTip(
+            "Map dark voxels bright and vice-versa (cmap='gray_r').\n"
+            "Often makes empty resin recede while dense material pops, "
+            "especially in MIP / Composite blending. Volume blending logic "
+            "is unchanged."
+        )
+        self.chk_invert_volume.toggled.connect(self.update_volume_render_mode)
+        h_invert.addWidget(self.chk_invert_volume)
+        h_invert.addStretch()
+        lo.addLayout(h_invert)
 
         h_curve = QtWidgets.QHBoxLayout()
         h_curve.addWidget(QtWidgets.QLabel("Opacity Curve:"))
@@ -1505,34 +1534,114 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.spin_grid_spacing_px.setVisible(show_px)
         self._refresh_reference_grid()
 
-    def _build_ref_grid_polydata(self, spacing_px, ext_x, ext_y):
-        """Return a pv.PolyData with line segments forming a floor grid."""
-        n_x = int(ext_x // spacing_px) + 1
-        n_y = int(ext_y // spacing_px) + 1
-        if n_x < 1 or n_y < 1 or spacing_px <= 0:
+    def _build_ref_grid_polydata(self, spacing_px, ext_x, ext_y, ext_z, z_ratio=1.0):
+        """Return a pv.PolyData with line segments forming a 3D wireframe
+        cage: gridlines on each of the 6 faces of [0, ext_x] x [0, ext_y]
+        x [0, ext_z * z_ratio]. Adjacent faces share their corner verts via
+        tick crossings — the result reads as a 3D grid through the volume.
+
+        z_ratio scales z values into display space (matches the rest of the
+        renderer which multiplies prescan z by self.z_ratio).
+        """
+        if spacing_px <= 0 or ext_x <= 0 or ext_y <= 0 or ext_z <= 0:
             return None
+        zmax = ext_z * z_ratio
+
+        x_ticks = [min(i * spacing_px, ext_x) for i in range(int(ext_x // spacing_px) + 1)]
+        y_ticks = [min(j * spacing_px, ext_y) for j in range(int(ext_y // spacing_px) + 1)]
+        z_ticks_real = [min(k * spacing_px, ext_z) for k in range(int(ext_z // spacing_px) + 1)]
+        z_ticks = [zt * z_ratio for zt in z_ticks_real]
+
+        if not x_ticks or not y_ticks or not z_ticks:
+            return None
+
         pts = []
         lines = []
-        idx = 0
-        for j in range(n_y + 1):
-            y = min(j * spacing_px, ext_y)
-            pts.append([0.0, y, 0.0])
-            pts.append([ext_x, y, 0.0])
-            lines.extend([2, idx, idx + 1])
-            idx += 2
-        for i in range(n_x + 1):
-            x = min(i * spacing_px, ext_x)
-            pts.append([x, 0.0, 0.0])
-            pts.append([x, ext_y, 0.0])
-            lines.extend([2, idx, idx + 1])
-            idx += 2
+        def seg(a, b):
+            i0 = len(pts); pts.append(a); pts.append(b)
+            lines.extend([2, i0, i0 + 1])
+
+        # XY faces (z = 0 and z = zmax) — full grid
+        for z_face in (0.0, zmax):
+            for y in y_ticks:
+                seg([0.0, y, z_face], [ext_x, y, z_face])
+            for x in x_ticks:
+                seg([x, 0.0, z_face], [x, ext_y, z_face])
+        # XZ faces (y = 0 and y = ext_y)
+        for y_face in (0.0, ext_y):
+            for z in z_ticks:
+                seg([0.0, y_face, z], [ext_x, y_face, z])
+            for x in x_ticks:
+                seg([x, y_face, 0.0], [x, y_face, zmax])
+        # YZ faces (x = 0 and x = ext_x)
+        for x_face in (0.0, ext_x):
+            for z in z_ticks:
+                seg([x_face, 0.0, z], [x_face, ext_y, z])
+            for y in y_ticks:
+                seg([x_face, y, 0.0], [x_face, y, zmax])
+
         poly = pv.PolyData()
         poly.points = np.array(pts, dtype=float)
         poly.lines = np.array(lines, dtype=int)
         return poly
 
+    def _build_ref_grid_label_data(self, spacing_px, ext_x, ext_y, ext_z, value_unit, z_ratio=1.0):
+        """Return (point_array, label_strings) for tick labels on the
+        front-bottom edges of the cage — one per X tick (on the y=0,
+        z=0 edge), Y tick (x=0, z=0), Z tick (x=0, y=0).
+
+        *value_unit* is "µm" or "px" — labels are formatted in that unit.
+        """
+        zmax = ext_z * z_ratio
+        # Sub-sampling: if there are too many ticks, label every Nth so the
+        # scene doesn't drown in text.
+        def thin(positions, max_labels=12):
+            n = len(positions)
+            if n <= max_labels:
+                return list(range(n))
+            step = max(1, n // max_labels)
+            return list(range(0, n, step))
+
+        px_xy_nm = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
+        px_z_nm = float(self.cfg.get('prescan_z_step', 150)) or 150.0
+
+        def fmt_xy(value_px):
+            if value_unit == "µm":
+                return f"{value_px * px_xy_nm / 1000.0:g} µm"
+            return f"{int(round(value_px))} px"
+
+        def fmt_z(value_px):
+            if value_unit == "µm":
+                return f"{value_px * px_z_nm / 1000.0:g} µm"
+            return f"{int(round(value_px))} px"
+
+        x_ticks = [min(i * spacing_px, ext_x) for i in range(int(ext_x // spacing_px) + 1)]
+        y_ticks = [min(j * spacing_px, ext_y) for j in range(int(ext_y // spacing_px) + 1)]
+        z_ticks_real = [min(k * spacing_px, ext_z) for k in range(int(ext_z // spacing_px) + 1)]
+
+        labels = []
+        positions = []
+        for i in thin(x_ticks):
+            x = x_ticks[i]
+            positions.append([x, -spacing_px * 0.3, 0.0])
+            labels.append(fmt_xy(x))
+        for i in thin(y_ticks):
+            y = y_ticks[i]
+            positions.append([-spacing_px * 0.3, y, 0.0])
+            labels.append(fmt_xy(y))
+        for i in thin(z_ticks_real):
+            zr = z_ticks_real[i]
+            positions.append([-spacing_px * 0.3, 0.0, zr * z_ratio])
+            labels.append(fmt_z(zr))
+
+        return np.array(positions, dtype=float) if positions else None, labels
+
     def _refresh_reference_grid(self):
         """Draw or remove the reference grid based on the Appearance controls.
+
+        The grid is a 3D wireframe cage at the volume bounds, with grid
+        lines on each of the 6 faces at the chosen spacing, and value
+        labels on the front-bottom X / Y / Z tick edges.
 
         Supports three unit modes:
           - "µm":   one grid, spacing entered in µm (converted via
@@ -1556,31 +1665,36 @@ class CylinderApp(QtWidgets.QMainWindow):
             self.plotter.render()
             return
 
-        # Plane extents (prescan pixel coordinates).
+        # Cage extents (prescan pixel coordinates).
         if self.vol_grid is not None:
             ext_x = self.max_dims[0] if self.max_dims[0] > 0 else 1000
             ext_y = self.max_dims[1] if self.max_dims[1] > 0 else 1000
+            ext_z = self.max_dims[2] if self.max_dims[2] > 0 else 1000
         elif self.rois:
             ext_x = max(r['x'] + r['w'] for r in self.rois)
             ext_y = max(r['y'] + r['h'] for r in self.rois)
+            ext_z = max(r['z'] + r['d'] for r in self.rois)
         else:
-            ext_x = ext_y = 1000
+            ext_x = ext_y = ext_z = 1000
 
         unit = self.combo_grid_unit.currentText() if hasattr(self, 'combo_grid_unit') else "µm"
         opacity = max(0.0, min(1.0, self.slider_grid_op.value() / 100.0))
         px_xy_nm = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
 
+        # (label_unit, color, spacing_px) tuples — one per concurrent grid.
         grids = []
         if unit in ("µm", "Both"):
             spacing_um = float(self.spin_grid_spacing.value())
             spacing_px = max(1.0, spacing_um * 1000.0 / px_xy_nm)
-            grids.append(("#bbbbbb", spacing_px))
+            grids.append(("µm", "#bbbbbb", spacing_px))
         if unit in ("px", "Both"):
             spacing_px = float(self.spin_grid_spacing_px.value())
-            grids.append(("#33ccff", spacing_px))
+            grids.append(("px", "#33ccff", spacing_px))
 
-        for color, spacing_px in grids:
-            poly = self._build_ref_grid_polydata(spacing_px, ext_x, ext_y)
+        for label_unit, color, spacing_px in grids:
+            poly = self._build_ref_grid_polydata(
+                spacing_px, ext_x, ext_y, ext_z, z_ratio=self.z_ratio
+            )
             if poly is None:
                 continue
             actor = self.plotter.add_mesh(
@@ -1588,6 +1702,25 @@ class CylinderApp(QtWidgets.QMainWindow):
                 lighting=False, reset_camera=False, pickable=False,
             )
             self.ref_grid_actors.append(actor)
+
+            # Tick value labels along the front-bottom X / Y / Z edges.
+            label_pts, label_strs = self._build_ref_grid_label_data(
+                spacing_px, ext_x, ext_y, ext_z, label_unit, z_ratio=self.z_ratio
+            )
+            if label_pts is None or len(label_pts) == 0:
+                continue
+            label_poly = pv.PolyData(label_pts)
+            label_poly["labels"] = label_strs
+            try:
+                lbl_actor = self.plotter.add_point_labels(
+                    label_poly, "labels",
+                    font_size=10, text_color=color, shadow=True,
+                    show_points=False, always_visible=True,
+                    shape_opacity=0.0, reset_camera=False,
+                )
+                self.ref_grid_actors.append(lbl_actor)
+            except Exception:
+                pass
 
         self.plotter.render()
 
@@ -1629,12 +1762,17 @@ class CylinderApp(QtWidgets.QMainWindow):
         default_max = self._VOL_MAX_DEFAULTS.get(blend_mode, 1.0)
         self.txt_vol_max.setText(f"{default_max:g}")
 
+        cmap = "gray_r" if (
+            hasattr(self, 'chk_invert_volume') and self.chk_invert_volume.isChecked()
+        ) else "gray"
         self.vol_actor = self.plotter.add_volume(
-            self.vol_grid, cmap="gray", clim=self.clim,
+            self.vol_grid, cmap=cmap, clim=self.clim,
             opacity="linear", blending=blend_mode, reset_camera=False,
         )
         # Re-add cylinder/ROI/label actors on top so the new volume actor's
-        # shader state doesn't clobber their colors.
+        # shader state doesn't clobber their colors. update_3d_scene also
+        # invokes _apply_cylinder_blend_compensation, so cylinder material
+        # properties match the new blend mode.
         self.update_3d_scene()
 
     def export_nml_tiles(self):
@@ -2214,6 +2352,47 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         self.update_visibility()
         self.update_opacity()
+        self._apply_cylinder_blend_compensation()
+
+    def _apply_cylinder_blend_compensation(self):
+        """Tune cylinder material properties so they survive Average and
+        Additive volume blends.
+
+        VTK's ray integrator combines volume samples with surface fragments;
+        in Average/Additive modes a translucent cyan cylinder gets averaged
+        toward the volume's grey or summed into white-out. Forcing the
+        actor's ambient up + diffuse down makes the cylinder read as a
+        flat-shaded, self-illuminated patch that holds its color even when
+        the integrator pushes neighbours toward grey.
+        """
+        if not hasattr(self, 'combo_render'):
+            return
+        mode_str = self.combo_render.currentText()
+        is_avg = "Average" in mode_str
+        is_add = "Additive" in mode_str
+        # In Composite/MIP/MinIP, default phong material looks fine.
+        ambient = 0.0; diffuse = 1.0; specular = 0.0
+        if is_avg:
+            # Average pulls everything toward mean grey — push cylinders
+            # to almost-flat self-illumination so their hue dominates.
+            ambient = 0.95; diffuse = 0.05; specular = 0.0
+        elif is_add:
+            # Additive sums; cylinders that were diffusely lit get washed
+            # to white. Lower diffuse, modest ambient.
+            ambient = 0.7; diffuse = 0.2; specular = 0.0
+
+        for actor in (self.actor_std, self.actor_exp,
+                      self.actor_man, self.actor_man_exp,
+                      self.actor_line, self.actor_line_exp):
+            if actor is None:
+                continue
+            try:
+                prop = actor.GetProperty()
+                prop.SetAmbient(ambient)
+                prop.SetDiffuse(diffuse)
+                prop.SetSpecular(specular)
+            except Exception:
+                pass
 
     def update_visibility(self):
         show = self.chk_4th.isChecked()
