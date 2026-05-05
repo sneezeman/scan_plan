@@ -62,7 +62,7 @@ From: mirror.gcr.io/library/ubuntu:24.04
     cp /etc/machine-id /var/lib/dbus/machine-id
 
 %runscript
-    exec scan-plan $@
+    exec scan_planner $@
 
 %labels
     Author William Chevremont (william.chevremont@esrf.fr), Artem Vorobyev (artem.vorobyev@esrf.fr)

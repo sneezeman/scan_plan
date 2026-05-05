@@ -30,3 +30,5 @@ scan_plan = ["instrument_defaults.json"]
 
 [project.scripts]
 scan_planner = "scan_plan.cli:main"
+# Backward-compat alias for older runscripts / muscle memory.
+scan-plan = "scan_plan.cli:main"
