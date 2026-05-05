@@ -8,7 +8,7 @@
 # Prerequisites:
 #   1. SSH access to the CVMFS publisher (scisoft10/11) as cvmfs-hpc
 #   2. The .sif image (built with: sudo apptainer build scan_planner.sif apptainer/scan_planner.def)
-#   3. The module file from this repo (apptainer/module/scan_planner/5.1.0)
+#   3. The module file from this repo (apptainer/module/scan_planner/2026.5.0)
 #
 # Run this FROM the CVMFS publisher machine (scisoft10/11).
 #
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 REPO="hpc.esrf.fr"
-VERSION="5.1.0"
+VERSION="2026.5.0"
 BASE="/cvmfs/${REPO}/software"
 PKG_DIR="${BASE}/packages/linux/x86_64/scan_planner/${VERSION}"
 MOD_DIR="${BASE}/modules/linux/x86_64/scan_planner"

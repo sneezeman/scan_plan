@@ -4,7 +4,7 @@
 ##
 
 proc ModulesHelp { } {
-    puts stderr "scan_planner v5.1.0 - Plan cylindrical scan regions in synchrotron tomography"
+    puts stderr "scan_planner v2026.5.0 - Plan cylindrical scan regions in synchrotron tomography"
     puts stderr ""
     puts stderr "Usage:  scan_planner [config.json] [--debug]"
     puts stderr ""
@@ -12,10 +12,10 @@ proc ModulesHelp { } {
     puts stderr "To update: cd /data/id16a/inhouse1/sware/Python/scan_plan && git pull"
 }
 
-module-whatis "scan_planner v5.1.0 - Cylinder Packing GUI for ID16A tomography"
+module-whatis "scan_planner v2026.5.0 - Cylinder Packing GUI for ID16A tomography"
 
 # Container image on CVMFS (read-only, only rebuilt when dependencies change)
-set sif /cvmfs/hpc.esrf.fr/software/packages/linux/x86_64/scan_planner/5.1.0/scan_planner.sif
+set sif /cvmfs/hpc.esrf.fr/software/packages/linux/x86_64/scan_planner/2026.5.0/scan_planner.sif
 
 # Source code on shared beamline storage (git-managed, updatable with git pull)
 set src /data/id16a/inhouse1/sware/Python/scan_plan

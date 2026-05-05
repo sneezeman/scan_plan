@@ -4,7 +4,7 @@ From: ubuntu:24.04
 %labels
     Author Artem (ID16A, ESRF)
     Description scan_planner - Cylinder Packing Strategy GUI for high-resolution tomography
-    Version 5.1.0
+    Version 2026.5.0
 
 %post
     export DEBIAN_FRONTEND=noninteractive
