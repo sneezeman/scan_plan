@@ -28,20 +28,20 @@ Choose one of two paths to define regions of interest (ROIs) in your prescan vol
 
 1. Upload prescan volume to WebKnossos
 2. Draw bounding boxes around regions of interest
-3. Export the annotation and load the .nml file into scan-plan via the **Load NML** button\
-**OR** Copy-paste the bounding boxes' coordinates from WebKnossos directly to the scan-plan application.
+3. Export the annotation and load the .nml file into scan_planner via the **Load NML** button\
+**OR** Copy-paste the bounding boxes' coordinates from WebKnossos directly to the scan_planner application.
 
 **Fiji / manual path:**
 
 1. Open the prescan volume in Fiji (or any image viewer)
 2. Identify bounding box coordinates manually as `x, y, z, w, h, d` (top-left corner + dimensions in pixels)
-3. Enter each ROI directly in the scan-plan UI text field and click **Add**
+3. Enter each ROI directly in the scan_planner UI text field and click **Add**
 
 **No pre-scan (Using an ID16A scan as prescan):**
 
 One can use an ID16A overview tomogram/fasttomo as the prescan volume instead of a separate pre-beamtime overview scan. In this case, the prescan and refscan coordinate systems are already identical. Follow the same workflow (bounding boxes, grid adjustment, export), and at the registration phase leave the table filled with zeros.
 
-### 2. Configure and launch scan-plan
+### 2. Configure and launch scan_planner
 
 1. Edit your JSON config file (see [Configuration](#configuration)):
    - Set `volume_path` to your prescan TIFF/RAW volume
@@ -49,9 +49,9 @@ One can use an ID16A overview tomogram/fasttomo as the prescan volume instead of
    - Optionally pre-define `rois` in the config, or load them at runtime
 2. Launch the GUI:
    ```bash
-   scan-plan                         # uses ./scan_plan_config.json
-   scan-plan my_config.json          # explicit config path
-   scan-plan my_config.json --debug  # verbose logging
+   scan_planner                         # uses ./scan_plan_config.json
+   scan_planner my_config.json          # explicit config path
+   scan_planner my_config.json --debug  # verbose logging
    ```
 
 ### 3. Adjust cylinder grid

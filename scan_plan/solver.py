@@ -33,9 +33,18 @@ def cylinder_dims(scan_res_nm, config):
     return (D_std, H_std), (D_exp, H_exp)
 
 
-def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
+def _solve_grid(roi_list, scan_res_nm, config, mode="center"):
+    """Compute cylinder grid points whose union covers *roi_list*.
+
+    All ROIs share a single grid; the centering logic uses the union's
+    bounding span. This is the per-batch primitive used by both
+    solve_global_union (one batch = all ROIs) and solve_per_box (one
+    batch per ROI).
+    """
     (D_std, H_std), (D_exp, H_exp) = cylinder_dims(scan_res_nm, config)
     if not roi_list:
+        return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
+    if D_std == 0 or H_std == 0:
         return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
 
     R = D_std / 2.0
@@ -46,9 +55,6 @@ def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
     max_x = max(r['x'] + r['w'] for r in roi_list)
     max_y = max(r['y'] + r['h'] for r in roi_list)
     max_z = max(r['z'] + r['d'] for r in roi_list)
-
-    if D_std == 0 or H_std == 0:
-        return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
 
     span_x, span_y, span_z = max_x - min_x, max_y - min_y, max_z - min_z
     count_x, count_y, count_z = math.floor(span_x/D_std), math.floor(span_y/D_std), math.floor(span_z/H_std)
@@ -96,6 +102,49 @@ def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
         final_points = final_points[sort_indices]
 
     return final_points, (D_std, H_std), (D_exp, H_exp)
+
+
+def solve_global_union(roi_list, scan_res_nm, config, mode="center"):
+    """One global grid that covers the union of all ROIs."""
+    return _solve_grid(roi_list, scan_res_nm, config, mode)
+
+
+def solve_per_box(roi_list, scan_res_nm, config, mode="center"):
+    """Independent grid per ROI; cylinders never cross box boundaries.
+
+    Adjacent or overlapping ROIs may produce duplicate cylinders; the
+    output is deduplicated on (x, y, z) at integer-pixel granularity.
+    """
+    (D_std, H_std), (D_exp, H_exp) = cylinder_dims(scan_res_nm, config)
+    if not roi_list:
+        return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
+
+    chunks = []
+    for roi in roi_list:
+        pts, _, _ = _solve_grid([roi], scan_res_nm, config, mode)
+        if len(pts) > 0:
+            chunks.append(pts)
+    if not chunks:
+        return np.empty((0,3)), (D_std, H_std), (D_exp, H_exp)
+
+    pts = np.vstack(chunks)
+    # Dedupe at sub-pixel granularity so two boxes meeting along a face
+    # don't both contribute the same border cylinder.
+    rounded = np.round(pts * 1000.0).astype(np.int64)
+    _, unique_idx = np.unique(rounded, axis=0, return_index=True)
+    pts = pts[np.sort(unique_idx)]
+    sort_idx = np.lexsort((pts[:, 0], pts[:, 1], pts[:, 2]))
+    return pts[sort_idx], (D_std, H_std), (D_exp, H_exp)
+
+
+def solve_bbox_grids(roi_list, scan_res_nm, config, mode="center", treatment="union"):
+    """Dispatcher between solve_global_union and solve_per_box.
+
+    *treatment* is "union" (single global grid) or "separate" (per-ROI grids).
+    """
+    if treatment == "separate":
+        return solve_per_box(roi_list, scan_res_nm, config, mode)
+    return solve_global_union(roi_list, scan_res_nm, config, mode)
 
 
 def solve_line_coverage(line_list, scan_res_nm, config, density=1.0):

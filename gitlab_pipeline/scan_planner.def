@@ -5,8 +5,8 @@ From: mirror.gcr.io/library/ubuntu:24.04
     # Qt/VTK rendering via X11 (NICE/NoMachine on the cluster)
     export QT_QPA_PLATFORM=xcb
     export PYVISTA_OFF_SCREEN=false
-    # Disable the D-Bus session bus — scan_plan doesn't need it and the
-    # container may not have a valid /etc/machine-id at runtime once
+    # Disable the D-Bus session bus — scan_planner doesn't need it and
+    # the container may not have a valid /etc/machine-id at runtime once
     # Apptainer bind-mounts the host's. Without this, PyQt5/QtDBus
     # crashes at startup with "No machine-id" / dbus connection errors.
     export DBUS_SESSION_BUS_ADDRESS=disabled:
@@ -71,6 +71,7 @@ EOF
         libxi6 \
         libxtst6 \
         libxrandr2 \
+        libxcursor1 \
 
 
     mkdir sources && cd sources
@@ -90,13 +91,13 @@ EOF
     # container has a valid value baked in. Apptainer may still bind-mount
     # the host's /etc/machine-id over this at runtime — the
     # DBUS_SESSION_BUS_ADDRESS=disabled: env in %environment is the
-    # runtime fallback that makes scan_plan tolerant either way.
+    # runtime fallback that makes scan_planner tolerant either way.
     cat /proc/sys/kernel/random/uuid | tr -d '-' > /etc/machine-id
     mkdir -p /var/lib/dbus
     cp /etc/machine-id /var/lib/dbus/machine-id
 
 %runscript
-    exec scan-plan $@
+    exec scan_planner $@
 
 %labels
     Author William Chevremont (william.chevremont@esrf.fr)

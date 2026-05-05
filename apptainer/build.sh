@@ -1,20 +1,20 @@
 #!/bin/bash
-# Build the scan_plan Apptainer image.
+# Build the scan_planner Apptainer image.
 #
 # Requires root or fakeroot privileges.
 #
 # Usage:
-#   bash build.sh              # builds scan_plan.sif in current directory
-#   bash build.sh /some/path   # builds scan_plan.sif at /some/path/scan_plan.sif
+#   bash build.sh              # builds scan_planner.sif in current directory
+#   bash build.sh /some/path   # builds scan_planner.sif at /some/path/scan_planner.sif
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEF_FILE="${SCRIPT_DIR}/scan_plan.def"
+DEF_FILE="${SCRIPT_DIR}/scan_planner.def"
 OUT_DIR="${1:-.}"
-OUT_FILE="${OUT_DIR}/scan_plan.sif"
+OUT_FILE="${OUT_DIR}/scan_planner.sif"
 
-echo "Building scan_plan Apptainer image..."
+echo "Building scan_planner Apptainer image..."
 echo "  Definition: ${DEF_FILE}"
 echo "  Output:     ${OUT_FILE}"
 

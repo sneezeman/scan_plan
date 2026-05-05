@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 from scan_plan.solver import (
     solve_global_union,
+    solve_per_box,
+    solve_bbox_grids,
     calculate_contrast_limits,
     solve_line_coverage,
     cylinder_dims,
@@ -55,6 +57,43 @@ class TestSolveGlobalUnion:
                 assert (pts[i, 2] < pts[i+1, 2]) or \
                        (pts[i, 2] == pts[i+1, 2] and pts[i, 1] < pts[i+1, 1]) or \
                        (pts[i, 2] == pts[i+1, 2] and pts[i, 1] == pts[i+1, 1] and pts[i, 0] <= pts[i+1, 0])
+
+
+class TestSolvePerBox:
+    def test_empty(self):
+        pts, ds, _ = solve_per_box([], 20, CFG)
+        assert len(pts) == 0
+        assert ds[0] > 0  # dims still valid
+
+    def test_single_roi_matches_union(self):
+        roi = [{"x": 0, "y": 0, "z": 0, "w": 2000, "h": 2000, "d": 2000}]
+        u_pts, _, _ = solve_global_union(roi, 20, CFG, mode="center")
+        s_pts, _, _ = solve_per_box(roi, 20, CFG, mode="center")
+        # One ROI: per-box and union should give the same set.
+        assert len(u_pts) == len(s_pts)
+        assert np.allclose(np.sort(u_pts, axis=0), np.sort(s_pts, axis=0))
+
+    def test_disjoint_rois_give_more_points_per_box(self):
+        # Two boxes far apart in X. Union recenters across the whole span,
+        # so the seam between them gets fewer (or no) cylinders. Per-box
+        # places its own grid in each, which generally yields >= union.
+        roi = [
+            {"x": 0,    "y": 0, "z": 0, "w": 2000, "h": 2000, "d": 2000},
+            {"x": 5000, "y": 0, "z": 0, "w": 2000, "h": 2000, "d": 2000},
+        ]
+        u_pts, _, _ = solve_global_union(roi, 20, CFG, mode="center")
+        s_pts, _, _ = solve_per_box(roi, 20, CFG, mode="center")
+        # Per-box should never produce fewer points for disjoint boxes
+        assert len(s_pts) >= len(u_pts)
+
+    def test_dispatcher(self):
+        roi = [{"x": 0, "y": 0, "z": 0, "w": 2000, "h": 2000, "d": 2000}]
+        u_pts, _, _ = solve_bbox_grids(roi, 20, CFG, mode="center", treatment="union")
+        s_pts, _, _ = solve_bbox_grids(roi, 20, CFG, mode="center", treatment="separate")
+        u_ref, _, _ = solve_global_union(roi, 20, CFG, mode="center")
+        s_ref, _, _ = solve_per_box(roi, 20, CFG, mode="center")
+        assert len(u_pts) == len(u_ref)
+        assert len(s_pts) == len(s_ref)
 
 
 class TestSolveLineCoverage:

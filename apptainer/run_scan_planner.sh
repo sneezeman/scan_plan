@@ -1,18 +1,18 @@
 #!/bin/bash
-# Wrapper script to launch scan_plan from the Apptainer container.
+# Wrapper script to launch scan_planner from the Apptainer container.
 #
-# The scan_plan source code is bind-mounted into the container via
-# PYTHONPATH, so `git pull` on the host updates the code without
-# rebuilding the container.
+# The Python source (package "scan_plan") is bind-mounted into the
+# container via PYTHONPATH, so `git pull` on the host updates the code
+# without rebuilding the container.
 #
 # Usage:
-#   bash run_scan_plan.sh                           # uses ./scan_plan_config.json
-#   bash run_scan_plan.sh /path/to/config.json      # explicit config
-#   bash run_scan_plan.sh config.json --debug        # with debug logging
+#   bash run_scan_planner.sh                            # uses ./scan_plan_config.json
+#   bash run_scan_planner.sh /path/to/config.json       # explicit config
+#   bash run_scan_planner.sh config.json --debug        # with debug logging
 #
 # Environment variables (override defaults):
-#   SCAN_PLAN_SIF   — path to scan_plan.sif
-#   SCAN_PLAN_SRC   — path to scan_plan git repo
+#   SCAN_PLANNER_SIF   — path to scan_planner.sif
+#   SCAN_PLANNER_SRC   — path to scan_plan git repo
 
 set -euo pipefail
 
@@ -20,12 +20,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Defaults — adjust these or set env vars before running
-SIF="${SCAN_PLAN_SIF:-${SCRIPT_DIR}/scan_plan.sif}"
-SRC="${SCAN_PLAN_SRC:-${REPO_DIR}}"
+SIF="${SCAN_PLANNER_SIF:-${SCRIPT_DIR}/scan_planner.sif}"
+SRC="${SCAN_PLANNER_SRC:-${REPO_DIR}}"
 
 if [ ! -f "${SIF}" ]; then
     echo "ERROR: Container image not found: ${SIF}"
-    echo "  Set SCAN_PLAN_SIF or build with: bash build.sh"
+    echo "  Set SCAN_PLANNER_SIF or build with: bash build.sh"
     exit 1
 fi
 

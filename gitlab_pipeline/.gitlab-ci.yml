@@ -12,4 +12,4 @@ deploy-apptainer-images:
   extends: .deploy-apptainer-images
   variables:
     EXPOSED_COMMANDS: |
-      scan-plan:scan-plan
+      scan_planner:scan_planner

@@ -1,22 +1,23 @@
 # GitLab CI / Apptainer build files
 
 These files are the GitLab-side recipe used by the ESRF Apptainer template
-to build and publish the `scan_plan` container image. They were originally
-authored by William Chevremont and adapted from the colleague's working
-copy.
+to build and publish the `scan_planner` container image (the Python
+package itself is named `scan_plan` and is pip-installed inside; the
+deployed module / CLI / SIF all use the `scan_planner` convention).
 
-The version here incorporates the **D-Bus machine-id fix** that was applied
-in commit `d11ee57` to the in-repo `apptainer/scan_plan.def`. Without it,
-PyQt5/QtDBus crashes at container startup because Apptainer bind-mounts the
-host's `/etc/machine-id` over the container's, which can be empty.
+The version here incorporates the **D-Bus machine-id fix** that was
+applied in commit `d11ee57` to the in-repo `apptainer/scan_planner.def`.
+Without it, PyQt5/QtDBus crashes at container startup because Apptainer
+bind-mounts the host's `/etc/machine-id` over the container's, which
+can be empty.
 
 ## Files
 
-- `scan_plan.def` — Apptainer/Singularity definition file. Used by the
-  `.build-apptainer-image` CI job.
+- `scan_planner.def` — Apptainer/Singularity definition file. Used by
+  the `.build-apptainer-image` CI job.
 - `.gitlab-ci.yml` — pipeline definition. Includes the ESRF
-  `apptainer/admin/templates` template and exposes `scan-plan` as the
-  runscript entry point.
+  `apptainer/admin/templates` template and exposes `scan_planner` as
+  the runscript entry point.
 
 ## Differences vs. the colleague's working copy
 
@@ -32,26 +33,25 @@ host's `/etc/machine-id` over the container's, which can be empty.
    `security.ubuntu.com` mid-build, which left the package index
    incomplete and caused `Package 'ca-certificates' has no installation
    candidate` failures.
-
-## Filename note
-
-The CI deploy repo (`apptainer/scan_planner`) uses the filename
-`scan_planner.def`, while this reference copy is named `scan_plan.def`
-to match the Python project's own naming. Rename when copying into the
-CI deploy repo.
+4. `libxcursor1` added to apt install list to silence the
+   `Failed to load Xcursor library` VTK warning at runtime.
+5. Renamed CLI command and SIF / module artifacts from `scan-plan` /
+   `scan_plan` to `scan_planner` to align with the colleague's already-
+   deployed module name.
 
 ## Deployment
 
 These files live in this directory as a reference. To deploy:
 
-1. Copy `scan_plan.def` to the location expected by the ESRF template
-   (typically the repo root or wherever the template's `BUILD_DEF` variable
-   points).
+1. Copy `scan_planner.def` to the location expected by the ESRF template
+   (typically the repo root, or wherever the template's `BUILD_DEF`
+   variable points).
 2. Copy `.gitlab-ci.yml` to the repo root of the GitLab project that
    triggers the build.
 
 ## Security note
 
-The deploy token is currently inlined in `scan_plan.def`. Prefer moving it
-to a GitLab CI/CD variable (e.g. `CI_DEPLOY_USER`/`CI_DEPLOY_PASSWORD`) and
-referencing it via `${VAR}` in the clone URL.
+The deploy token is currently inlined in `scan_planner.def`. Prefer
+moving it to a GitLab CI/CD variable (e.g.
+`CI_DEPLOY_USER` / `CI_DEPLOY_PASSWORD`) and referencing it via `${VAR}`
+in the clone URL.

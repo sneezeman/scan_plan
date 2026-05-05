@@ -29,4 +29,4 @@ packages = ["scan_plan"]
 scan_plan = ["instrument_defaults.json"]
 
 [project.scripts]
-scan-plan = "scan_plan.cli:main"
+scan_planner = "scan_plan.cli:main"

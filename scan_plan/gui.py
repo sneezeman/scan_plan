@@ -14,7 +14,7 @@ from pyvistaqt import QtInteractor
 from scan_plan.volume_registration import VolumeRegistration
 from scan_plan.nml_exporter import generate_nml
 from scan_plan.io import parse_nml, detect_tiff_dims, update_user_config_keys
-from scan_plan.solver import solve_global_union, solve_line_coverage
+from scan_plan.solver import solve_bbox_grids, solve_line_coverage
 
 
 class ConfigDialog(QtWidgets.QDialog):
@@ -222,7 +222,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         self.in_sz = _mm(0.0)
         self.in_px = QtWidgets.QDoubleSpinBox()
         self.in_px.setRange(0.01, 100000.0); self.in_px.setDecimals(2)
-        self.in_px.setValue(180.0); self.in_px.setSuffix(" nm")
+        self.in_px.setValue(150.0); self.in_px.setSuffix(" nm")
         self.in_final_px = QtWidgets.QDoubleSpinBox()
         self.in_final_px.setRange(0.01, 100000.0); self.in_final_px.setDecimals(2)
         self.in_final_px.setValue(100.0); self.in_final_px.setSuffix(" nm")
@@ -641,7 +641,7 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         Returns (None, None, None, []) if the active set is empty.
         """
-        pts = self.main_app.apply_output_flips(self.main_app.get_all_active_points())
+        pts = self.main_app.get_all_active_points()
         if len(pts) == 0:
             return None, None, None, []
         XYZcoords_refscan = active_vreg.transformToRefscan(pts)
@@ -724,7 +724,7 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         active_vreg = self.vreg_svd if idx == 0 else self.vreg_opt
 
-        pts = self.main_app.apply_output_flips(self.main_app.get_all_active_points())
+        pts = self.main_app.get_all_active_points()
 
         if len(pts) == 0:
             QtWidgets.QMessageBox.warning(self, "Error", "No active cylinders.")
@@ -839,6 +839,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.actor_line_exp = None
         self.vol_actor = None
         self.actor_labels = None
+        self.actor_ref_grid = None
 
         self.setWindowTitle("Scan Plan Planner")
         self.showMaximized()
@@ -862,16 +863,24 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(420)
+        scroll.setFixedWidth(440)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         panel = QtWidgets.QWidget()
+        # Tighten group-box padding so the sidebar fits common laptop heights.
+        panel.setStyleSheet(
+            "QGroupBox { margin-top: 6px; padding-top: 8px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 3px; }"
+            "QPushButton { padding: 3px 6px; }"
+        )
         scroll.setWidget(panel)
         layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(4)
 
         layout.addWidget(self._create_appearance_group())
         layout.addWidget(self._create_add_cylinders_tabs())
         layout.addWidget(self._create_config_group())
         layout.addWidget(self._create_auto_grid_group())
-        layout.addWidget(self._create_orient_group())
         layout.addWidget(self._create_actions_group())
 
         layout.addStretch()
@@ -879,8 +888,22 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         self.plotter = QtInteractor(self)
         self.plotter.set_background("black")
-        self.plotter.add_axes()
-        self.plotter.show_grid()
+        # White, bold X/Y/Z labels with shadow so they're readable on both
+        # dark volumes and bright slices. (No native VTK outline; shadow
+        # is the closest available approximation.)
+        axes_marker = self.plotter.add_axes()
+        try:
+            ax_actor = axes_marker.GetOrientationMarker()
+            for caption in (ax_actor.GetXAxisCaptionActor2D(),
+                            ax_actor.GetYAxisCaptionActor2D(),
+                            ax_actor.GetZAxisCaptionActor2D()):
+                tp = caption.GetCaptionTextProperty()
+                tp.SetColor(1.0, 1.0, 1.0)
+                tp.SetBold(1)
+                tp.SetShadow(1)
+                tp.SetFontSize(14)
+        except Exception:
+            pass
         # Depth peeling lets opaque/translucent geometry composite correctly
         # over volume renderings; without it, "Average" blending tends to
         # wash cylinder/bbox colors into the volume's grayscale.
@@ -978,13 +1001,6 @@ class CylinderApp(QtWidgets.QMainWindow):
         h.addWidget(self.spin_res)
         lo.addLayout(h)
 
-        self.combo_mode = QtWidgets.QComboBox()
-        self.combo_mode.addItems(["Strict", "Center", "Coverage"])
-        self.combo_mode.setCurrentIndex(1)
-        self.combo_mode.currentTextChanged.connect(self.recalculate_points)
-        lo.addWidget(QtWidgets.QLabel("Fill Mode:"))
-        lo.addWidget(self.combo_mode)
-
         self.chk_4th = QtWidgets.QCheckBox("Show 4th Distance")
         self.chk_4th.toggled.connect(self.update_visibility)
         lo.addWidget(self.chk_4th)
@@ -1000,10 +1016,28 @@ class CylinderApp(QtWidgets.QMainWindow):
         h_rend = QtWidgets.QHBoxLayout()
         h_rend.addWidget(QtWidgets.QLabel("Volume Blending:"))
         self.combo_render = QtWidgets.QComboBox()
-        self.combo_render.addItems(["Composite", "MIP (Maximum)", "MinIP (Minimum)", "Average"])
+        self.combo_render.addItems(["Composite", "MIP (Maximum)", "MinIP (Minimum)", "Average", "Additive"])
         self.combo_render.currentTextChanged.connect(self.update_volume_render_mode)
         h_rend.addWidget(self.combo_render)
         lo.addLayout(h_rend)
+
+        h_curve = QtWidgets.QHBoxLayout()
+        h_curve.addWidget(QtWidgets.QLabel("Opacity Curve:"))
+        self.combo_opacity_curve = QtWidgets.QComboBox()
+        self.combo_opacity_curve.addItems([
+            "Linear",
+            "Sigmoid (gentle)", "Sigmoid (medium)", "Sigmoid (sharp)",
+            "Threshold (low)", "Threshold (mid)", "Threshold (high)",
+        ])
+        self.combo_opacity_curve.setToolTip(
+            "Linear: standard ramp from clim[0]→0 to clim[1]→Max.\n"
+            "Sigmoid: S-curve transfer function — suppresses dark voxels "
+            "(empty resin) while keeping the bright object visible.\n"
+            "Threshold: hard cutoff at 30% / 50% / 70% of the dynamic range."
+        )
+        self.combo_opacity_curve.currentTextChanged.connect(self.update_opacity)
+        h_curve.addWidget(self.combo_opacity_curve)
+        lo.addLayout(h_curve)
 
         lo.addWidget(QtWidgets.QLabel("Cyl Opacity"))
         self.slider_cyl = QtWidgets.QSlider(QtCore.Qt.Horizontal)
@@ -1043,18 +1077,32 @@ class CylinderApp(QtWidgets.QMainWindow):
         h_vol.addWidget(arrows_w)
         lo.addLayout(h_vol)
 
-        grp.setLayout(lo)
-        return grp
+        # Reference grid controls — a floor grid in the volume's coordinate
+        # frame, useful for gauging distances against the rendered scene.
+        h_grid_top = QtWidgets.QHBoxLayout()
+        self.chk_ref_grid = QtWidgets.QCheckBox("Show Reference Grid")
+        self.chk_ref_grid.toggled.connect(self._refresh_reference_grid)
+        h_grid_top.addWidget(self.chk_ref_grid)
+        h_grid_top.addStretch()
+        lo.addLayout(h_grid_top)
 
-    def _create_orient_group(self):
-        grp = QtWidgets.QGroupBox("Output Flip")
-        lo = QtWidgets.QHBoxLayout()
-        self.chk_flip_x = QtWidgets.QCheckBox("X")
-        self.chk_flip_y = QtWidgets.QCheckBox("Y")
-        self.chk_flip_z = QtWidgets.QCheckBox("Z")
-        lo.addWidget(self.chk_flip_x)
-        lo.addWidget(self.chk_flip_y)
-        lo.addWidget(self.chk_flip_z)
+        h_grid = QtWidgets.QHBoxLayout()
+        h_grid.addWidget(QtWidgets.QLabel("Spacing:"))
+        self.spin_grid_spacing = QtWidgets.QDoubleSpinBox()
+        self.spin_grid_spacing.setRange(0.1, 100000.0)
+        self.spin_grid_spacing.setDecimals(1)
+        self.spin_grid_spacing.setValue(50.0)
+        self.spin_grid_spacing.setSuffix(" µm")
+        self.spin_grid_spacing.editingFinished.connect(self._refresh_reference_grid)
+        h_grid.addWidget(self.spin_grid_spacing)
+        h_grid.addWidget(QtWidgets.QLabel("Opacity:"))
+        self.slider_grid_op = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider_grid_op.setRange(0, 100)
+        self.slider_grid_op.setValue(40)
+        self.slider_grid_op.valueChanged.connect(self._refresh_reference_grid)
+        h_grid.addWidget(self.slider_grid_op)
+        lo.addLayout(h_grid)
+
         grp.setLayout(lo)
         return grp
 
@@ -1114,15 +1162,42 @@ class CylinderApp(QtWidgets.QMainWindow):
         lo.addLayout(h)
 
         h_del = QtWidgets.QHBoxLayout()
-        self.btn_del_rois = QtWidgets.QPushButton("Delete Selected")
+        self.btn_del_rois = QtWidgets.QPushButton("Delete")
         self.btn_del_rois.setEnabled(False)
         self.btn_del_rois.clicked.connect(self.delete_selected_rois)
-        self.btn_restore_rois = QtWidgets.QPushButton("Restore last deleted")
+        self.btn_restore_rois = QtWidgets.QPushButton("Undo delete")
         self.btn_restore_rois.setEnabled(False)
         self.btn_restore_rois.clicked.connect(self.restore_last_deleted_rois)
         h_del.addWidget(self.btn_del_rois)
         h_del.addWidget(self.btn_restore_rois)
         lo.addLayout(h_del)
+
+        # Fill Mode and Treatment live with Bounding Boxes because they
+        # only affect bbox-derived cylinders.
+        h_fill = QtWidgets.QHBoxLayout()
+        h_fill.addWidget(QtWidgets.QLabel("Fill Mode:"))
+        self.combo_mode = QtWidgets.QComboBox()
+        self.combo_mode.addItems(["Strict", "Center", "Coverage"])
+        self.combo_mode.setCurrentIndex(1)
+        self.combo_mode.currentTextChanged.connect(self.recalculate_points)
+        h_fill.addWidget(self.combo_mode)
+        lo.addLayout(h_fill)
+
+        h_treat = QtWidgets.QHBoxLayout()
+        h_treat.addWidget(QtWidgets.QLabel("Treat boxes as:"))
+        self.combo_treatment = QtWidgets.QComboBox()
+        self.combo_treatment.addItems(["Single volume", "Separate boxes"])
+        self.combo_treatment.setCurrentIndex(0)
+        self.combo_treatment.setToolTip(
+            "Single volume: one global grid spans the union of all boxes "
+            "(adjacent boxes share cylinders).\n"
+            "Separate boxes: each box gets its own grid (cylinders never "
+            "cross box boundaries; some redundancy at overlaps)."
+        )
+        self.combo_treatment.currentTextChanged.connect(self.recalculate_points)
+        h_treat.addWidget(self.combo_treatment)
+        lo.addLayout(h_treat)
+
         grp.setLayout(lo)
         # Update gating when selection or list contents change.
         self.roi_list_widget.itemSelectionChanged.connect(self._update_action_states)
@@ -1189,10 +1264,10 @@ class CylinderApp(QtWidgets.QMainWindow):
         lo.addWidget(self.line_list_widget)
 
         h_del = QtWidgets.QHBoxLayout()
-        self.btn_del_lines = QtWidgets.QPushButton("Delete Selected")
+        self.btn_del_lines = QtWidgets.QPushButton("Delete")
         self.btn_del_lines.setEnabled(False)
         self.btn_del_lines.clicked.connect(self.delete_selected_lines)
-        self.btn_restore_lines = QtWidgets.QPushButton("Restore last deleted")
+        self.btn_restore_lines = QtWidgets.QPushButton("Undo delete")
         self.btn_restore_lines.setEnabled(False)
         self.btn_restore_lines.clicked.connect(self.restore_last_deleted_lines)
         h_del.addWidget(self.btn_del_lines)
@@ -1347,10 +1422,11 @@ class CylinderApp(QtWidgets.QMainWindow):
         ba.clicked.connect(lambda: self.set_all_cyls(True))
         bn = QtWidgets.QPushButton("None")
         bn.clicked.connect(lambda: self.set_all_cyls(False))
-        self.btn_del_manual = QtWidgets.QPushButton("Delete Selected (Manual)")
+        self.btn_del_manual = QtWidgets.QPushButton("Delete (M)")
         self.btn_del_manual.setEnabled(False)
+        self.btn_del_manual.setToolTip("Delete selected manual cylinders. Auto and Line cylinders are derived and not user-deletable here.")
         self.btn_del_manual.clicked.connect(self.delete_selected_combined)
-        self.btn_restore_manual = QtWidgets.QPushButton("Restore last deleted")
+        self.btn_restore_manual = QtWidgets.QPushButton("Undo delete")
         self.btn_restore_manual.setEnabled(False)
         self.btn_restore_manual.clicked.connect(self.restore_last_deleted_manual)
         h.addWidget(ba)
@@ -1378,7 +1454,7 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         self.btn_register = QtWidgets.QPushButton("REGISTER COORDINATES")
         self.btn_register.clicked.connect(self.open_registration_dialog)
-        self.btn_register.setStyleSheet("background-color: purple; color: white; font-weight: bold; padding: 10px;")
+        self.btn_register.setStyleSheet("background-color: purple; color: white; font-weight: bold; padding: 6px;")
         lo.addWidget(self.btn_register)
 
         grp.setLayout(lo)
@@ -1393,6 +1469,72 @@ class CylinderApp(QtWidgets.QMainWindow):
         "minimum": 0.1,
         "average": 0.01,
     }
+
+    def _refresh_reference_grid(self):
+        """Draw or remove the reference grid based on the Appearance controls."""
+        if not hasattr(self, 'plotter') or self.plotter is None:
+            return
+        # Remove the previous grid actor regardless of show state, since
+        # spacing/opacity changes need a rebuild.
+        if self.actor_ref_grid is not None:
+            try:
+                self.plotter.remove_actor(self.actor_ref_grid, reset_camera=False)
+            except Exception:
+                pass
+            self.actor_ref_grid = None
+
+        if not getattr(self, 'chk_ref_grid', None) or not self.chk_ref_grid.isChecked():
+            self.plotter.render()
+            return
+
+        # Convert spacing from µm to prescan pixels for placement.
+        px_xy = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
+        spacing_um = float(self.spin_grid_spacing.value())
+        spacing_px = max(1.0, spacing_um * 1000.0 / px_xy)
+
+        if self.vol_grid is not None:
+            ext_x = self.max_dims[0] if self.max_dims[0] > 0 else 1000
+            ext_y = self.max_dims[1] if self.max_dims[1] > 0 else 1000
+        else:
+            # Span the bounding boxes the user has defined; fallback to 1000.
+            if self.rois:
+                ext_x = max(r['x'] + r['w'] for r in self.rois)
+                ext_y = max(r['y'] + r['h'] for r in self.rois)
+            else:
+                ext_x = ext_y = 1000
+
+        # Build line-segment polydata: parallel-to-X lines at every spacing
+        # in Y, parallel-to-Y at every spacing in X.
+        n_x = int(ext_x // spacing_px) + 1
+        n_y = int(ext_y // spacing_px) + 1
+        if n_x < 1 or n_y < 1:
+            return
+
+        pts = []
+        lines = []
+        idx = 0
+        for j in range(n_y + 1):
+            y = min(j * spacing_px, ext_y)
+            pts.append([0.0, y, 0.0])
+            pts.append([ext_x, y, 0.0])
+            lines.extend([2, idx, idx + 1])
+            idx += 2
+        for i in range(n_x + 1):
+            x = min(i * spacing_px, ext_x)
+            pts.append([x, 0.0, 0.0])
+            pts.append([x, ext_y, 0.0])
+            lines.extend([2, idx, idx + 1])
+            idx += 2
+
+        poly = pv.PolyData()
+        poly.points = np.array(pts, dtype=float)
+        poly.lines = np.array(lines, dtype=int)
+        opacity = max(0.0, min(1.0, self.slider_grid_op.value() / 100.0))
+        self.actor_ref_grid = self.plotter.add_mesh(
+            poly, color="#888888", line_width=1, opacity=opacity,
+            lighting=False, reset_camera=False, pickable=False,
+        )
+        self.plotter.render()
 
     def _scale_vol_max(self, factor):
         try:
@@ -1425,6 +1567,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         if "MIP" in mode_str: blend_mode = "maximum"
         elif "MinIP" in mode_str: blend_mode = "minimum"
         elif "Average" in mode_str: blend_mode = "average"
+        elif "Additive" in mode_str: blend_mode = "additive"
 
         # Auto-set Vol Opacity Max on mode change so the volume is visible
         # without manual fiddling. The user can still override afterwards.
@@ -1479,14 +1622,6 @@ class CylinderApp(QtWidgets.QMainWindow):
     def _on_show_manual_toggled(self, _):
         self.refresh_cyl_list()
         self.update_3d_scene()
-
-    def apply_output_flips(self, pts):
-        """Apply output flip checkboxes to a copy of the points array."""
-        pts = pts.copy()
-        if self.chk_flip_x.isChecked(): pts[:, 0] = self.max_dims[0] - pts[:, 0]
-        if self.chk_flip_y.isChecked(): pts[:, 1] = self.max_dims[1] - pts[:, 1]
-        if self.chk_flip_z.isChecked(): pts[:, 2] = self.max_dims[2] - pts[:, 2]
-        return pts
 
     def get_all_active_points(self):
         final_points = []
@@ -1616,7 +1751,12 @@ class CylinderApp(QtWidgets.QMainWindow):
         old_count = len(self.all_points)
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            self.all_points, self.dims_std, self.dims_exp = solve_global_union(self.rois, self.current_scan_res, self.cfg, mode)
+            treatment = "separate" if (
+                hasattr(self, 'combo_treatment') and self.combo_treatment.currentIndex() == 1
+            ) else "union"
+            self.all_points, self.dims_std, self.dims_exp = solve_bbox_grids(
+                self.rois, self.current_scan_res, self.cfg, mode, treatment
+            )
             active_lines = [ln for ln, ok in zip(self.lines, self.active_line_mask) if ok]
             self.line_points, _, _ = solve_line_coverage(
                 active_lines, self.current_scan_res, self.cfg, density=self.line_density
@@ -2045,18 +2185,63 @@ class CylinderApp(QtWidgets.QMainWindow):
             vol_op = (self.slider_vol.value() / 100.0) * vol_max
             otf = self.vol_actor.GetProperty().GetScalarOpacity()
             otf.RemoveAllPoints()
-            otf.AddPoint(self.clim[0], 0.0)
-            otf.AddPoint(self.clim[1], vol_op)
+            curve = (self.combo_opacity_curve.currentText()
+                     if hasattr(self, 'combo_opacity_curve') else "Linear")
+            for v, op in self._build_opacity_points(curve, self.clim, vol_op):
+                otf.AddPoint(v, op)
 
         self.plotter.render()
+
+    @staticmethod
+    def _build_opacity_points(curve, clim, vol_op):
+        """Return a list of (scalar_value, opacity) tuples for the volume's
+        scalar opacity transfer function.
+
+        - Linear: ramp from clim[0]→0 to clim[1]→vol_op (matches old behavior).
+        - Sigmoid (gentle/medium/sharp): S-curve sampled at 32 points; center
+          at the dynamic-range midpoint, sharper variants suppress more of
+          the lower range — useful for hiding empty resin around an object.
+        - Threshold (low/mid/high): hard cutoff at 30% / 50% / 70% of the
+          range; below the cutoff opacity is 0, above it is vol_op.
+        """
+        lo, hi = float(clim[0]), float(clim[1])
+        if hi <= lo:
+            return [(lo, 0.0), (lo + 1.0, vol_op)]
+
+        if curve == "Linear":
+            return [(lo, 0.0), (hi, vol_op)]
+
+        if curve.startswith("Threshold"):
+            frac = {"Threshold (low)": 0.30,
+                    "Threshold (mid)": 0.50,
+                    "Threshold (high)": 0.70}.get(curve, 0.50)
+            cut = lo + frac * (hi - lo)
+            eps = max(1e-9, (hi - lo) * 1e-3)
+            return [(lo, 0.0),
+                    (cut - eps, 0.0),
+                    (cut + eps, vol_op),
+                    (hi, vol_op)]
+
+        # Sigmoid family: f(x) = 1 / (1 + exp(-k*(x - x0)))
+        # Steeper k → sharper transition; x0 sits at 50% of range.
+        k_map = {"Sigmoid (gentle)": 4.0,
+                 "Sigmoid (medium)": 8.0,
+                 "Sigmoid (sharp)":  16.0}
+        k = k_map.get(curve, 8.0)
+        n = 32
+        xs = np.linspace(lo, hi, n)
+        norm = (xs - lo) / (hi - lo) - 0.5  # in [-0.5, 0.5]
+        y = 1.0 / (1.0 + np.exp(-k * norm))
+        # Anchor the curve so opacity is exactly 0 at lo and vol_op at hi.
+        y = (y - y[0]) / max(y[-1] - y[0], 1e-12)
+        y *= vol_op
+        return list(zip(xs.tolist(), y.tolist()))
 
     def export_coordinates(self):
         pts = self.get_all_active_points()
         if len(pts) == 0:
             print("\n=== SCAN EXPORT ===\nNo active cylinders.\n")
             return
-
-        pts = self.apply_output_flips(pts)
 
         print("\n=== SCAN EXPORT ===")
         print(f"Total Active (Auto + Manual): {len(pts)}")
