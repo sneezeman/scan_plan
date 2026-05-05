@@ -839,7 +839,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.actor_line_exp = None
         self.vol_actor = None
         self.actor_labels = None
-        self.actor_ref_grid = None
+        self.ref_grid_actors = []  # list of actors so "Both" mode can stack two
 
         self.setWindowTitle("Scan Plan Planner")
         self.showMaximized()
@@ -1079,15 +1079,23 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         # Reference grid controls — a floor grid in the volume's coordinate
         # frame, useful for gauging distances against the rendered scene.
+        # Supports µm, px, or both (two distinguishable overlaid grids).
         h_grid_top = QtWidgets.QHBoxLayout()
         self.chk_ref_grid = QtWidgets.QCheckBox("Show Reference Grid")
         self.chk_ref_grid.toggled.connect(self._refresh_reference_grid)
         h_grid_top.addWidget(self.chk_ref_grid)
+        h_grid_top.addWidget(QtWidgets.QLabel("Units:"))
+        self.combo_grid_unit = QtWidgets.QComboBox()
+        self.combo_grid_unit.addItems(["µm", "px", "Both"])
+        self.combo_grid_unit.currentTextChanged.connect(self._on_grid_unit_changed)
+        h_grid_top.addWidget(self.combo_grid_unit)
         h_grid_top.addStretch()
         lo.addLayout(h_grid_top)
 
         h_grid = QtWidgets.QHBoxLayout()
-        h_grid.addWidget(QtWidgets.QLabel("Spacing:"))
+        # µm spacing (used in "µm" and "Both" modes)
+        self.lbl_grid_um = QtWidgets.QLabel("µm:")
+        h_grid.addWidget(self.lbl_grid_um)
         self.spin_grid_spacing = QtWidgets.QDoubleSpinBox()
         self.spin_grid_spacing.setRange(0.1, 100000.0)
         self.spin_grid_spacing.setDecimals(1)
@@ -1095,13 +1103,29 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.spin_grid_spacing.setSuffix(" µm")
         self.spin_grid_spacing.editingFinished.connect(self._refresh_reference_grid)
         h_grid.addWidget(self.spin_grid_spacing)
-        h_grid.addWidget(QtWidgets.QLabel("Opacity:"))
+        # px spacing (used in "px" and "Both" modes)
+        self.lbl_grid_px = QtWidgets.QLabel("px:")
+        h_grid.addWidget(self.lbl_grid_px)
+        self.spin_grid_spacing_px = QtWidgets.QSpinBox()
+        self.spin_grid_spacing_px.setRange(1, 1_000_000)
+        self.spin_grid_spacing_px.setValue(100)
+        self.spin_grid_spacing_px.setSuffix(" px")
+        self.spin_grid_spacing_px.editingFinished.connect(self._refresh_reference_grid)
+        h_grid.addWidget(self.spin_grid_spacing_px)
+        lo.addLayout(h_grid)
+
+        h_grid_op = QtWidgets.QHBoxLayout()
+        h_grid_op.addWidget(QtWidgets.QLabel("Opacity:"))
         self.slider_grid_op = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.slider_grid_op.setRange(0, 100)
         self.slider_grid_op.setValue(40)
         self.slider_grid_op.valueChanged.connect(self._refresh_reference_grid)
-        h_grid.addWidget(self.slider_grid_op)
-        lo.addLayout(h_grid)
+        h_grid_op.addWidget(self.slider_grid_op)
+        lo.addLayout(h_grid_op)
+
+        # Initialize visibility for the default unit ("µm").
+        self.lbl_grid_px.setVisible(False)
+        self.spin_grid_spacing_px.setVisible(False)
 
         grp.setLayout(lo)
         return grp
@@ -1470,46 +1494,23 @@ class CylinderApp(QtWidgets.QMainWindow):
         "average": 0.01,
     }
 
-    def _refresh_reference_grid(self):
-        """Draw or remove the reference grid based on the Appearance controls."""
-        if not hasattr(self, 'plotter') or self.plotter is None:
-            return
-        # Remove the previous grid actor regardless of show state, since
-        # spacing/opacity changes need a rebuild.
-        if self.actor_ref_grid is not None:
-            try:
-                self.plotter.remove_actor(self.actor_ref_grid, reset_camera=False)
-            except Exception:
-                pass
-            self.actor_ref_grid = None
+    def _on_grid_unit_changed(self, _):
+        """Show/hide spacing controls based on the selected unit."""
+        unit = self.combo_grid_unit.currentText()
+        show_um = unit in ("µm", "Both")
+        show_px = unit in ("px", "Both")
+        self.lbl_grid_um.setVisible(show_um)
+        self.spin_grid_spacing.setVisible(show_um)
+        self.lbl_grid_px.setVisible(show_px)
+        self.spin_grid_spacing_px.setVisible(show_px)
+        self._refresh_reference_grid()
 
-        if not getattr(self, 'chk_ref_grid', None) or not self.chk_ref_grid.isChecked():
-            self.plotter.render()
-            return
-
-        # Convert spacing from µm to prescan pixels for placement.
-        px_xy = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
-        spacing_um = float(self.spin_grid_spacing.value())
-        spacing_px = max(1.0, spacing_um * 1000.0 / px_xy)
-
-        if self.vol_grid is not None:
-            ext_x = self.max_dims[0] if self.max_dims[0] > 0 else 1000
-            ext_y = self.max_dims[1] if self.max_dims[1] > 0 else 1000
-        else:
-            # Span the bounding boxes the user has defined; fallback to 1000.
-            if self.rois:
-                ext_x = max(r['x'] + r['w'] for r in self.rois)
-                ext_y = max(r['y'] + r['h'] for r in self.rois)
-            else:
-                ext_x = ext_y = 1000
-
-        # Build line-segment polydata: parallel-to-X lines at every spacing
-        # in Y, parallel-to-Y at every spacing in X.
+    def _build_ref_grid_polydata(self, spacing_px, ext_x, ext_y):
+        """Return a pv.PolyData with line segments forming a floor grid."""
         n_x = int(ext_x // spacing_px) + 1
         n_y = int(ext_y // spacing_px) + 1
-        if n_x < 1 or n_y < 1:
-            return
-
+        if n_x < 1 or n_y < 1 or spacing_px <= 0:
+            return None
         pts = []
         lines = []
         idx = 0
@@ -1525,15 +1526,69 @@ class CylinderApp(QtWidgets.QMainWindow):
             pts.append([x, ext_y, 0.0])
             lines.extend([2, idx, idx + 1])
             idx += 2
-
         poly = pv.PolyData()
         poly.points = np.array(pts, dtype=float)
         poly.lines = np.array(lines, dtype=int)
+        return poly
+
+    def _refresh_reference_grid(self):
+        """Draw or remove the reference grid based on the Appearance controls.
+
+        Supports three unit modes:
+          - "µm":   one grid, spacing entered in µm (converted via
+                    prescan_pixel_size_xy).
+          - "px":   one grid, spacing entered directly in prescan pixels.
+          - "Both": two distinguishable grids overlaid (µm in light grey,
+                    px in cyan) so you can read both scales at once.
+        """
+        if not hasattr(self, 'plotter') or self.plotter is None:
+            return
+        # Remove previous actors first; spacing/opacity/unit changes require
+        # a full rebuild.
+        for act in self.ref_grid_actors:
+            try:
+                self.plotter.remove_actor(act, reset_camera=False)
+            except Exception:
+                pass
+        self.ref_grid_actors = []
+
+        if not getattr(self, 'chk_ref_grid', None) or not self.chk_ref_grid.isChecked():
+            self.plotter.render()
+            return
+
+        # Plane extents (prescan pixel coordinates).
+        if self.vol_grid is not None:
+            ext_x = self.max_dims[0] if self.max_dims[0] > 0 else 1000
+            ext_y = self.max_dims[1] if self.max_dims[1] > 0 else 1000
+        elif self.rois:
+            ext_x = max(r['x'] + r['w'] for r in self.rois)
+            ext_y = max(r['y'] + r['h'] for r in self.rois)
+        else:
+            ext_x = ext_y = 1000
+
+        unit = self.combo_grid_unit.currentText() if hasattr(self, 'combo_grid_unit') else "µm"
         opacity = max(0.0, min(1.0, self.slider_grid_op.value() / 100.0))
-        self.actor_ref_grid = self.plotter.add_mesh(
-            poly, color="#888888", line_width=1, opacity=opacity,
-            lighting=False, reset_camera=False, pickable=False,
-        )
+        px_xy_nm = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
+
+        grids = []
+        if unit in ("µm", "Both"):
+            spacing_um = float(self.spin_grid_spacing.value())
+            spacing_px = max(1.0, spacing_um * 1000.0 / px_xy_nm)
+            grids.append(("#bbbbbb", spacing_px))
+        if unit in ("px", "Both"):
+            spacing_px = float(self.spin_grid_spacing_px.value())
+            grids.append(("#33ccff", spacing_px))
+
+        for color, spacing_px in grids:
+            poly = self._build_ref_grid_polydata(spacing_px, ext_x, ext_y)
+            if poly is None:
+                continue
+            actor = self.plotter.add_mesh(
+                poly, color=color, line_width=1, opacity=opacity,
+                lighting=False, reset_camera=False, pickable=False,
+            )
+            self.ref_grid_actors.append(actor)
+
         self.plotter.render()
 
     def _scale_vol_max(self, factor):
