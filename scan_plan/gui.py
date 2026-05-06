@@ -3,6 +3,7 @@ GUI classes: CylinderApp (main window) and RegistrationDialog.
 """
 
 import os
+import re
 import numpy as np
 import pyvista as pv
 import pandas as pd
@@ -50,6 +51,11 @@ class ConfigDialog(QtWidgets.QDialog):
         # Volume file picker
         h_vol = QtWidgets.QHBoxLayout()
         self.txt_volume = QtWidgets.QLineEdit(str(config.get("volume_path", "")))
+        # Whenever the path field is committed (Enter / focus-out), try to
+        # auto-fill raw_dims from the filename pattern.
+        self.txt_volume.editingFinished.connect(
+            lambda: self._try_prefill_dims_from_filename(self.txt_volume.text())
+        )
         btn_browse = QtWidgets.QPushButton("Browse…")
         btn_browse.clicked.connect(self._browse_volume)
         h_vol.addWidget(self.txt_volume)
@@ -137,6 +143,37 @@ class ConfigDialog(QtWidgets.QDialog):
         if path:
             self.txt_volume.setText(path)
             self._detect_dims(path)
+            self._try_prefill_dims_from_filename(path)
+
+    # Match `_<int>x<int>x<int>` immediately before the file extension.
+    # Accepts either lowercase `x` or uppercase `X` as the separator.
+    _DIMS_PATTERN = re.compile(r"_(\d+)[xX](\d+)[xX](\d+)$")
+
+    def _try_prefill_dims_from_filename(self, path):
+        """If the basename ends in `_XxYxZ.<ext>` (e.g. sample_512x512x512.raw),
+        prefill the raw_dims spinboxes with those integers.
+
+        TIFF auto-detection (via _detect_dims) is authoritative when it
+        succeeds, so for `.tif` / `.tiff` we skip this — the header values
+        already populated the fields. For headerless `.raw` / `.vol` (and
+        anything else), the filename pattern is the only signal we have.
+        """
+        if not path:
+            return
+        base = os.path.basename(str(path))
+        stem, ext = os.path.splitext(base)
+        if ext.lower() in (".tif", ".tiff"):
+            return
+        m = self._DIMS_PATTERN.search(stem)
+        if not m:
+            return
+        try:
+            x, y, z = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        except ValueError:
+            return
+        self.spin_dim_x.setValue(x)
+        self.spin_dim_y.setValue(y)
+        self.spin_dim_z.setValue(z)
 
     def _detect_dims(self, path=None):
         if not isinstance(path, str) or not path:
