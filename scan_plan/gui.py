@@ -835,13 +835,17 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.clim = clim
 
         self.z_ratio = config['prescan_z_step'] / config['prescan_pixel_size_xy']
-        self.max_dims = [0,0,0]
+        # max_dims is the volume's extent in *world* coordinates (the same
+        # coordinate system the rest of the renderer uses for cylinders and
+        # ROIs). vol_grid.bounds is authoritative because it already
+        # incorporates both `binning` and the internal `render_bin`
+        # downsampling that load_volume applies for very large volumes.
+        # Z is in world space too — vol_grid's z-spacing already includes
+        # the z_ratio factor, so don't double-scale downstream.
+        self.max_dims = [0, 0, 0]
         if vol_grid is not None:
-            self.max_dims = [
-                vol_grid.dimensions[0] * config['binning'],
-                vol_grid.dimensions[1] * config['binning'],
-                vol_grid.dimensions[2] * config['binning']
-            ]
+            xmin, xmax, ymin, ymax, zmin, zmax = vol_grid.bounds
+            self.max_dims = [xmax - xmin, ymax - ymin, zmax - zmin]
 
         self.all_points = np.empty((0,3))
         self.manual_points = []
@@ -1571,23 +1575,21 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.spin_grid_spacing_px.setVisible(show_px)
         self._refresh_reference_grid()
 
-    def _build_ref_grid_polydata(self, spacing_px, ext_x, ext_y, ext_z, z_ratio=1.0):
+    def _build_ref_grid_polydata(self, spacing_px, ext_x, ext_y, ext_z):
         """Return a pv.PolyData with line segments forming a 3D wireframe
-        cage: gridlines on each of the 6 faces of [0, ext_x] x [0, ext_y]
-        x [0, ext_z * z_ratio]. Adjacent faces share their corner verts via
-        tick crossings — the result reads as a 3D grid through the volume.
-
-        z_ratio scales z values into display space (matches the rest of the
-        renderer which multiplies prescan z by self.z_ratio).
+        cage: gridlines on each of the 6 faces of [0, ext_x] × [0, ext_y]
+        × [0, ext_z]. All extents are in world coordinates (the same
+        coordinate system the renderer places cylinders and ROIs in).
+        Adjacent faces share their corner verts via tick crossings — the
+        result reads as a 3D grid through the volume.
         """
         if spacing_px <= 0 or ext_x <= 0 or ext_y <= 0 or ext_z <= 0:
             return None
-        zmax = ext_z * z_ratio
+        zmax = ext_z
 
         x_ticks = [min(i * spacing_px, ext_x) for i in range(int(ext_x // spacing_px) + 1)]
         y_ticks = [min(j * spacing_px, ext_y) for j in range(int(ext_y // spacing_px) + 1)]
-        z_ticks_real = [min(k * spacing_px, ext_z) for k in range(int(ext_z // spacing_px) + 1)]
-        z_ticks = [zt * z_ratio for zt in z_ticks_real]
+        z_ticks = [min(k * spacing_px, ext_z) for k in range(int(ext_z // spacing_px) + 1)]
 
         if not x_ticks or not y_ticks or not z_ticks:
             return None
@@ -1622,14 +1624,16 @@ class CylinderApp(QtWidgets.QMainWindow):
         poly.lines = np.array(lines, dtype=int)
         return poly
 
-    def _build_ref_grid_label_data(self, spacing_px, ext_x, ext_y, ext_z, value_unit, z_ratio=1.0):
+    def _build_ref_grid_label_data(self, spacing_px, ext_x, ext_y, ext_z, value_unit):
         """Return (point_array, label_strings) for tick labels on the
         front-bottom edges of the cage — one per X tick (on the y=0,
         z=0 edge), Y tick (x=0, z=0), Z tick (x=0, y=0).
 
+        All extents and tick positions are in world coordinates.
         *value_unit* is "µm" or "px" — labels are formatted in that unit.
+        For "µm" mode, world-space lengths are converted to µm using the
+        prescan pixel sizes (xy for X/Y, z_step for Z).
         """
-        zmax = ext_z * z_ratio
         # Sub-sampling: if there are too many ticks, label every Nth so the
         # scene doesn't drown in text.
         def thin(positions, max_labels=12):
@@ -1641,23 +1645,31 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         px_xy_nm = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
         px_z_nm = float(self.cfg.get('prescan_z_step', 150)) or 150.0
+        # World-space Z values have already been multiplied by z_ratio
+        # (= prescan_z_step / prescan_pixel_size_xy), so converting them
+        # back to µm uses prescan_pixel_size_xy, not prescan_z_step.
+        # Equivalent: world_z_units * px_xy_nm / 1000 = real_z_µm.
+        # That happens to equal real_z_prescan_pixels * px_z_nm / 1000.
+        z_world_to_um = px_xy_nm / 1000.0
+        xy_world_to_um = px_xy_nm / 1000.0
 
         # VTK string arrays are ASCII-only — use "um" (not "µm") in the
         # actual label text. The Qt UI elements that say "µm" stay as-is
         # because Qt handles Unicode fine.
-        def fmt_xy(value_px):
+        def fmt_xy(world_value):
             if value_unit == "µm":
-                return f"{value_px * px_xy_nm / 1000.0:g} um"
-            return f"{int(round(value_px))} px"
+                return f"{world_value * xy_world_to_um:g} um"
+            return f"{int(round(world_value))} px"
 
-        def fmt_z(value_px):
+        def fmt_z(world_value):
             if value_unit == "µm":
-                return f"{value_px * px_z_nm / 1000.0:g} um"
-            return f"{int(round(value_px))} px"
+                return f"{world_value * z_world_to_um:g} um"
+            # px display is the prescan-pixel count, i.e. world-z / z_ratio.
+            return f"{int(round(world_value / max(self.z_ratio, 1e-9)))} px"
 
         x_ticks = [min(i * spacing_px, ext_x) for i in range(int(ext_x // spacing_px) + 1)]
         y_ticks = [min(j * spacing_px, ext_y) for j in range(int(ext_y // spacing_px) + 1)]
-        z_ticks_real = [min(k * spacing_px, ext_z) for k in range(int(ext_z // spacing_px) + 1)]
+        z_ticks = [min(k * spacing_px, ext_z) for k in range(int(ext_z // spacing_px) + 1)]
 
         labels = []
         positions = []
@@ -1669,10 +1681,10 @@ class CylinderApp(QtWidgets.QMainWindow):
             y = y_ticks[i]
             positions.append([-spacing_px * 0.3, y, 0.0])
             labels.append(fmt_xy(y))
-        for i in thin(z_ticks_real):
-            zr = z_ticks_real[i]
-            positions.append([-spacing_px * 0.3, 0.0, zr * z_ratio])
-            labels.append(fmt_z(zr))
+        for i in thin(z_ticks):
+            z = z_ticks[i]
+            positions.append([-spacing_px * 0.3, 0.0, z])
+            labels.append(fmt_z(z))
 
         return np.array(positions, dtype=float) if positions else None, labels
 
@@ -1705,7 +1717,9 @@ class CylinderApp(QtWidgets.QMainWindow):
             self.plotter.render()
             return
 
-        # Cage extents (prescan pixel coordinates).
+        # Cage extents in *world* coordinates (the same space cylinders
+        # and ROIs live in: x and y are prescan pixels, z is prescan
+        # pixels × z_ratio).
         if self.vol_grid is not None:
             ext_x = self.max_dims[0] if self.max_dims[0] > 0 else 1000
             ext_y = self.max_dims[1] if self.max_dims[1] > 0 else 1000
@@ -1713,7 +1727,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         elif self.rois:
             ext_x = max(r['x'] + r['w'] for r in self.rois)
             ext_y = max(r['y'] + r['h'] for r in self.rois)
-            ext_z = max(r['z'] + r['d'] for r in self.rois)
+            ext_z = max(r['z'] + r['d'] for r in self.rois) * self.z_ratio
         else:
             ext_x = ext_y = ext_z = 1000
 
@@ -1722,6 +1736,8 @@ class CylinderApp(QtWidgets.QMainWindow):
         px_xy_nm = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
 
         # (label_unit, color, spacing_px) tuples — one per concurrent grid.
+        # Spacing is in *world* units (x/y prescan pixels). Since X-Y world
+        # spacing equals prescan-pixel size, "µm" mode converts via px_xy_nm.
         grids = []
         if unit in ("µm", "Both"):
             spacing_um = float(self.spin_grid_spacing.value())
@@ -1733,7 +1749,7 @@ class CylinderApp(QtWidgets.QMainWindow):
 
         for label_unit, color, spacing_px in grids:
             poly = self._build_ref_grid_polydata(
-                spacing_px, ext_x, ext_y, ext_z, z_ratio=self.z_ratio
+                spacing_px, ext_x, ext_y, ext_z
             )
             if poly is None:
                 continue
@@ -1745,7 +1761,7 @@ class CylinderApp(QtWidgets.QMainWindow):
 
             # Tick value labels along the front-bottom X / Y / Z edges.
             label_pts, label_strs = self._build_ref_grid_label_data(
-                spacing_px, ext_x, ext_y, ext_z, label_unit, z_ratio=self.z_ratio
+                spacing_px, ext_x, ext_y, ext_z, label_unit
             )
             if label_pts is None or len(label_pts) == 0:
                 continue
