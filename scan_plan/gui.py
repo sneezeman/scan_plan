@@ -1642,14 +1642,17 @@ class CylinderApp(QtWidgets.QMainWindow):
         px_xy_nm = float(self.cfg.get('prescan_pixel_size_xy', 150)) or 150.0
         px_z_nm = float(self.cfg.get('prescan_z_step', 150)) or 150.0
 
+        # VTK string arrays are ASCII-only — use "um" (not "µm") in the
+        # actual label text. The Qt UI elements that say "µm" stay as-is
+        # because Qt handles Unicode fine.
         def fmt_xy(value_px):
             if value_unit == "µm":
-                return f"{value_px * px_xy_nm / 1000.0:g} µm"
+                return f"{value_px * px_xy_nm / 1000.0:g} um"
             return f"{int(round(value_px))} px"
 
         def fmt_z(value_px):
             if value_unit == "µm":
-                return f"{value_px * px_z_nm / 1000.0:g} µm"
+                return f"{value_px * px_z_nm / 1000.0:g} um"
             return f"{int(round(value_px))} px"
 
         x_ticks = [min(i * spacing_px, ext_x) for i in range(int(ext_x // spacing_px) + 1)]
