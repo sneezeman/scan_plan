@@ -228,6 +228,26 @@ class TestSolveParallelogramCoverage:
         assert len(pts) == 1
         assert np.allclose(pts[0], np.array(p))
 
+    def test_mode_ordering(self):
+        # strict ≤ center ≤ coverage on the same parallelogram.
+        (D, _), _ = cylinder_dims(20, CFG)
+        plg = ((0.0, 0.0, 0.0), (10 * D, 0.0, 0.0), (0.0, 10 * D, 0.0))
+        ns = []
+        for mode in ("strict", "center", "coverage"):
+            pts, _, _ = solve_parallelogram_coverage([plg], 20, CFG, mode=mode)
+            ns.append(len(pts))
+        assert ns[0] <= ns[1] <= ns[2]
+
+    def test_strict_excludes_when_too_small(self):
+        # Parallelogram smaller than one cylinder → strict yields 0,
+        # center yields >= 1.
+        (D, _), _ = cylinder_dims(20, CFG)
+        small = ((0.0, 0.0, 0.0), (D / 4, 0.0, 0.0), (0.0, D / 4, 0.0))
+        pts_strict, _, _ = solve_parallelogram_coverage([small], 20, CFG, mode="strict")
+        pts_center, _, _ = solve_parallelogram_coverage([small], 20, CFG, mode="center")
+        assert len(pts_strict) == 0
+        assert len(pts_center) >= 1
+
 
 class TestCalculateContrastLimits:
     def test_none_input(self):

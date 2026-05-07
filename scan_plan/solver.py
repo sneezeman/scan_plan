@@ -225,7 +225,36 @@ def _half_reach_along(unit_vec, R, half_h_z):
     return min(cand) if cand else float("inf")
 
 
-def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0):
+def _tile_axis(L, half_reach, spacing, mode):
+    """Return (n, first_offset) for placing N cylinders along a 1D edge of
+    length *L* with anisotropic half-reach *half_reach* and packing
+    *spacing*. *mode* matches the bbox semantics:
+
+      strict   — cylinder fully inside the edge (centers >= half_reach
+                 from each end). Yields 0 if the edge is shorter than 2h.
+      center   — cylinder centers must lie on [0, L] (some surface area
+                 of the cylinders overhangs by up to half_reach).
+      coverage — cylinder partially intersects the edge (centers may be
+                 up to half_reach beyond either end).
+    """
+    if mode == "strict":
+        L_eff = L - 2.0 * half_reach
+        base = half_reach
+    elif mode == "coverage":
+        L_eff = L + 2.0 * half_reach
+        base = -half_reach
+    else:  # center / default
+        L_eff = L
+        base = 0.0
+    if spacing <= 0 or L_eff < 0:
+        return 0, 0.0
+    n = max(1, int(L_eff // spacing) + 1)
+    used = (n - 1) * spacing
+    extra = max(0.0, L_eff - used)
+    return n, base + extra / 2.0
+
+
+def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0, mode="center"):
     """Tile cylinders across each parallelogram defined by three corners.
 
     Each entry is a tuple (p0, p1, p2). The parallelogram has corners
@@ -233,10 +262,9 @@ def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0):
     Cylinders are placed on a regular 2D grid spanning the (u1, u2) plane.
 
     Spacing along each edge follows the same anisotropic logic as
-    solve_line_coverage: how far along the unit edge direction a cylinder
-    extends before its surface cuts the line. *density* > 1 packs tighter
-    (overlap), *density* < 1 leaves gaps. Default 1 = touching, no overlap
-    along each edge axis.
+    solve_line_coverage. *density* > 1 packs tighter (overlap), *density*
+    < 1 leaves gaps. *mode* mirrors the bbox Fill Mode (strict / center /
+    coverage), applied independently to each edge axis.
 
     Returns (points, (D_std, H_std), (D_exp, H_exp)).
     """
@@ -247,6 +275,7 @@ def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0):
     R = D_std / 2.0
     half_h_z = H_std / 2.0
     density = max(float(density), 1e-6)
+    mode = (mode or "center").lower()
 
     out = []
     for p0, p1, p2 in plg_list:
@@ -261,21 +290,19 @@ def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0):
             out.append(a)
             continue
         if L1 == 0:
-            # Degenerates to a line along u2 — defer to line packing logic
+            # Degenerates to a line along u2.
             half2 = _half_reach_along(u2 / L2, R, half_h_z)
             spacing2 = (2.0 * half2) / density
-            n2 = max(1, int(np.ceil((L2 - half2) / spacing2)) + 1)
-            offset2 = max(0.0, (L2 - (n2 - 1) * spacing2) / 2.0)
+            n2, off2 = _tile_axis(L2, half2, spacing2, mode)
             for j in range(n2):
-                out.append(a + (offset2 + j * spacing2) * (u2 / L2))
+                out.append(a + (off2 + j * spacing2) * (u2 / L2))
             continue
         if L2 == 0:
             half1 = _half_reach_along(u1 / L1, R, half_h_z)
             spacing1 = (2.0 * half1) / density
-            n1 = max(1, int(np.ceil((L1 - half1) / spacing1)) + 1)
-            offset1 = max(0.0, (L1 - (n1 - 1) * spacing1) / 2.0)
+            n1, off1 = _tile_axis(L1, half1, spacing1, mode)
             for i in range(n1):
-                out.append(a + (offset1 + i * spacing1) * (u1 / L1))
+                out.append(a + (off1 + i * spacing1) * (u1 / L1))
             continue
 
         u1h = u1 / L1
@@ -284,21 +311,15 @@ def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0):
         half2 = _half_reach_along(u2h, R, half_h_z)
         spacing1 = (2.0 * half1) / density
         spacing2 = (2.0 * half2) / density
-        if spacing1 <= 0 or spacing2 <= 0:
-            out.append(a)
+        n1, off1 = _tile_axis(L1, half1, spacing1, mode)
+        n2, off2 = _tile_axis(L2, half2, spacing2, mode)
+        if n1 == 0 or n2 == 0:
             continue
-
-        n1 = max(1, int(np.ceil((L1 - half1) / spacing1)) + 1)
-        n2 = max(1, int(np.ceil((L2 - half2) / spacing2)) + 1)
-        used1 = (n1 - 1) * spacing1
-        used2 = (n2 - 1) * spacing2
-        offset1 = max(0.0, (L1 - used1) / 2.0)
-        offset2 = max(0.0, (L2 - used2) / 2.0)
 
         for j in range(n2):
             for i in range(n1):
-                t1 = offset1 + i * spacing1
-                t2 = offset2 + j * spacing2
+                t1 = off1 + i * spacing1
+                t2 = off2 + j * spacing2
                 out.append(a + t1 * u1h + t2 * u2h)
 
     if not out:

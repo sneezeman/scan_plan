@@ -1128,6 +1128,19 @@ class CylinderApp(QtWidgets.QMainWindow):
         h_rend.addWidget(self.combo_render)
         lo.addLayout(h_rend)
 
+        h_style = QtWidgets.QHBoxLayout()
+        h_style.addWidget(QtWidgets.QLabel("Cyl Style:"))
+        self.combo_cyl_style = QtWidgets.QComboBox()
+        self.combo_cyl_style.addItems(["Solid", "Wireframe"])
+        self.combo_cyl_style.setToolTip(
+            "Wireframe always reads cleanly against any volume cmap; "
+            "use it if cylinders disappear into a dense rendering."
+        )
+        self.combo_cyl_style.currentIndexChanged.connect(self.update_3d_scene)
+        h_style.addWidget(self.combo_cyl_style)
+        h_style.addStretch()
+        lo.addLayout(h_style)
+
         h_cmap = QtWidgets.QHBoxLayout()
         h_cmap.addWidget(QtWidgets.QLabel("Colormap:"))
         self.combo_cmap = QtWidgets.QComboBox()
@@ -1631,6 +1644,24 @@ class CylinderApp(QtWidgets.QMainWindow):
         h3.addWidget(b_clr)
         lo.addLayout(h3)
 
+        h_mode = QtWidgets.QHBoxLayout()
+        h_mode.addWidget(QtWidgets.QLabel("Fill Mode:"))
+        self.combo_plg_mode = QtWidgets.QComboBox()
+        self.combo_plg_mode.addItems(["Strict", "Center", "Coverage"])
+        self.combo_plg_mode.setCurrentIndex(1)  # Center default
+        self.combo_plg_mode.setToolTip(
+            "Strict: cylinder fully inside the parallelogram (centers ≥ "
+            "half-reach from each edge).\n"
+            "Center: cylinder centers lie on the parallelogram surface; "
+            "edges may overhang.\n"
+            "Coverage: cylinders may extend up to half-reach beyond each "
+            "edge — overlap-tolerant tiling."
+        )
+        self.combo_plg_mode.currentTextChanged.connect(self.recalculate_parallelogram_points)
+        h_mode.addWidget(self.combo_plg_mode)
+        h_mode.addStretch()
+        lo.addLayout(h_mode)
+
         h_dens = QtWidgets.QHBoxLayout()
         h_dens.addWidget(QtWidgets.QLabel("Density:"))
         self.spin_plg_density = QtWidgets.QDoubleSpinBox()
@@ -1760,8 +1791,11 @@ class CylinderApp(QtWidgets.QMainWindow):
 
     def recalculate_parallelogram_points(self):
         active_plgs = [plg for plg, ok in zip(self.parallelograms, self.active_plg_mask) if ok]
+        plg_mode = (self.combo_plg_mode.currentText().lower()
+                    if hasattr(self, 'combo_plg_mode') else "center")
         pts, dims_std, dims_exp = solve_parallelogram_coverage(
-            active_plgs, self.current_scan_res, self.cfg, density=self.parallelogram_density
+            active_plgs, self.current_scan_res, self.cfg,
+            density=self.parallelogram_density, mode=plg_mode,
         )
         self.parallelogram_points = pts
         self.active_plg_cyl_mask = np.ones(len(pts), dtype=bool)
@@ -2328,8 +2362,11 @@ class CylinderApp(QtWidgets.QMainWindow):
             )
             self.active_line_cyl_mask = np.ones(len(self.line_points), dtype=bool)
             active_plgs = [plg for plg, ok in zip(self.parallelograms, self.active_plg_mask) if ok]
+            plg_mode = (self.combo_plg_mode.currentText().lower()
+                        if hasattr(self, 'combo_plg_mode') else "center")
             self.parallelogram_points, _, _ = solve_parallelogram_coverage(
-                active_plgs, self.current_scan_res, self.cfg, density=self.parallelogram_density
+                active_plgs, self.current_scan_res, self.cfg,
+                density=self.parallelogram_density, mode=plg_mode,
             )
             self.active_plg_cyl_mask = np.ones(len(self.parallelogram_points), dtype=bool)
         finally:
@@ -2690,22 +2727,54 @@ class CylinderApp(QtWidgets.QMainWindow):
             act_pts = self.plotter.add_mesh(pts_mesh, color=color, point_size=10, render_points_as_spheres=True, lighting=False, reset_camera=False)
             self.line_actors.append(act_pts)
 
-        # Draw parallelogram outlines: 4 edges per shape, plus corner spheres
+        # Parallelepiped outline: the 4-corner parallelogram (P0, P1, P3,
+        # P2) extruded by ±H/2 in display Z so the wireframe matches the
+        # actual scan volume the cylinders carve out. 8 corners, 12 edges.
+        h_z_offset = (self.dims_std[1] / 2.0) * self.z_ratio if self.dims_std[1] > 0 else 0.0
+        z_off = np.array([0.0, 0.0, h_z_offset])
         for (p0, p1, p2), active in zip(self.parallelograms, self.active_plg_mask):
             a = np.array([p0[0], p0[1], p0[2] * self.z_ratio])
             b = np.array([p1[0], p1[1], p1[2] * self.z_ratio])
             c = np.array([p2[0], p2[1], p2[2] * self.z_ratio])
-            d = b + c - a   # 4th corner: P1 + (P2 - P0)
+            d = b + c - a   # 4th in-plane corner: P1 + (P2 - P0)
             color = "#ffaa33" if active else "#666666"
-            for u, v in ((a, b), (b, d), (d, c), (c, a)):
+            top = (a + z_off, b + z_off, d + z_off, c + z_off)
+            bot = (a - z_off, b - z_off, d - z_off, c - z_off)
+            edges = (
+                # top face
+                (top[0], top[1]), (top[1], top[2]),
+                (top[2], top[3]), (top[3], top[0]),
+                # bottom face
+                (bot[0], bot[1]), (bot[1], bot[2]),
+                (bot[2], bot[3]), (bot[3], bot[0]),
+                # vertical pillars connecting the two faces
+                (top[0], bot[0]), (top[1], bot[1]),
+                (top[2], bot[2]), (top[3], bot[3]),
+            )
+            for u, v in edges:
                 edge_mesh = pv.Line(u, v)
-                act = self.plotter.add_mesh(edge_mesh, color=color, line_width=2, lighting=False, reset_camera=False)
+                act = self.plotter.add_mesh(
+                    edge_mesh, color=color, line_width=2,
+                    lighting=False, reset_camera=False,
+                )
                 self.plg_actors.append(act)
-            corners = pv.PolyData(np.vstack([a, b, c]))
-            act_pts = self.plotter.add_mesh(corners, color=color, point_size=10,
-                                            render_points_as_spheres=True,
-                                            lighting=False, reset_camera=False)
-            self.plg_actors.append(act_pts)
+            # Highlight the user-input corners P0, P1, P2 on the mid plane;
+            # smaller dots on the 8 box corners so they're visible but not
+            # noisy.
+            mid_corners = pv.PolyData(np.vstack([a, b, c]))
+            act_mid = self.plotter.add_mesh(
+                mid_corners, color=color, point_size=12,
+                render_points_as_spheres=True,
+                lighting=False, reset_camera=False,
+            )
+            self.plg_actors.append(act_mid)
+            box_corners = pv.PolyData(np.vstack(top + bot))
+            act_box = self.plotter.add_mesh(
+                box_corners, color=color, point_size=6,
+                render_points_as_spheres=True,
+                lighting=False, reset_camera=False, opacity=0.7,
+            )
+            self.plg_actors.append(act_box)
 
         # Collect all label points and sequential IDs
         label_points = []
@@ -2720,10 +2789,16 @@ class CylinderApp(QtWidgets.QMainWindow):
             vis_H_std = h_std * self.z_ratio; vis_H_exp = h_exp * self.z_ratio
 
             c1 = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=d_std/2, height=vis_H_std)
-            self.actor_std = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c1, scale=False), color='cyan', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
+            self.actor_std = self.plotter.add_mesh(
+                pv.PolyData(vp).glyph(geom=c1, scale=False),
+                **self._cyl_mesh_kwargs('cyan', self.slider_cyl.value() / 100),
+            )
 
             c2 = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=d_exp/2, height=vis_H_exp)
-            self.actor_exp = self.plotter.add_mesh(pv.PolyData(vp).glyph(geom=c2, scale=False), color='magenta', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
+            self.actor_exp = self.plotter.add_mesh(
+                pv.PolyData(vp).glyph(geom=c2, scale=False),
+                **self._cyl_mesh_kwargs('magenta', self.slider_cyl.value() / 100),
+            )
 
             for pt in vp:
                 label_points.append(pt)
@@ -2748,15 +2823,15 @@ class CylinderApp(QtWidgets.QMainWindow):
                                       radius=d_std/2, height=h_std*self.z_ratio)
                     self.actor_line = self.plotter.add_mesh(
                         pv.PolyData(lp).glyph(geom=c_l, scale=False),
-                        color='orange', opacity=self.slider_cyl.value()/100,
-                        lighting=False, reset_camera=False)
+                        **self._cyl_mesh_kwargs('orange', self.slider_cyl.value() / 100),
+                    )
                 if d_exp > 0 and h_exp > 0:
                     c_le = pv.Cylinder(center=(0,0,0), direction=(0,0,1),
                                        radius=d_exp/2, height=h_exp*self.z_ratio)
                     self.actor_line_exp = self.plotter.add_mesh(
                         pv.PolyData(lp).glyph(geom=c_le, scale=False),
-                        color='#ff6600', opacity=self.slider_cyl.value()/100,
-                        lighting=False, reset_camera=False)
+                        **self._cyl_mesh_kwargs('#ff6600', self.slider_cyl.value() / 100),
+                    )
                 for pt in lp:
                     label_points.append(pt)
                     label_ids.append(f"L{seq}")
@@ -2780,16 +2855,14 @@ class CylinderApp(QtWidgets.QMainWindow):
                                       radius=d_std / 2, height=h_std * self.z_ratio)
                     self.actor_plg = self.plotter.add_mesh(
                         pv.PolyData(pp).glyph(geom=c_p, scale=False),
-                        color='#ffcc66', opacity=self.slider_cyl.value() / 100,
-                        lighting=False, reset_camera=False,
+                        **self._cyl_mesh_kwargs('#ffcc66', self.slider_cyl.value() / 100),
                     )
                 if d_exp > 0 and h_exp > 0:
                     c_pe = pv.Cylinder(center=(0, 0, 0), direction=(0, 0, 1),
                                        radius=d_exp / 2, height=h_exp * self.z_ratio)
                     self.actor_plg_exp = self.plotter.add_mesh(
                         pv.PolyData(pp).glyph(geom=c_pe, scale=False),
-                        color='#ff9933', opacity=self.slider_cyl.value() / 100,
-                        lighting=False, reset_camera=False,
+                        **self._cyl_mesh_kwargs('#ff9933', self.slider_cyl.value() / 100),
                     )
                 for pt in pp:
                     label_points.append(pt)
@@ -2804,11 +2877,17 @@ class CylinderApp(QtWidgets.QMainWindow):
                 vis_H_std = self.dims_std[1] * self.z_ratio
 
                 c_man = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_std[0]/2, height=vis_H_std)
-                self.actor_man = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
+                self.actor_man = self.plotter.add_mesh(
+                    pv.PolyData(mp).glyph(geom=c_man, scale=False),
+                    **self._cyl_mesh_kwargs('yellow', self.slider_cyl.value() / 100),
+                )
 
                 vis_H_exp = self.dims_exp[1] * self.z_ratio
                 c_man_exp = pv.Cylinder(center=(0,0,0), direction=(0,0,1), radius=self.dims_exp[0]/2, height=vis_H_exp)
-                self.actor_man_exp = self.plotter.add_mesh(pv.PolyData(mp).glyph(geom=c_man_exp, scale=False), color='yellow', opacity=self.slider_cyl.value()/100, lighting=False, reset_camera=False)
+                self.actor_man_exp = self.plotter.add_mesh(
+                    pv.PolyData(mp).glyph(geom=c_man_exp, scale=False),
+                    **self._cyl_mesh_kwargs('#ffe066', self.slider_cyl.value() / 100),
+                )
 
                 for pt in mp:
                     label_points.append(pt)
@@ -2831,6 +2910,31 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.update_opacity()
         self._apply_cylinder_blend_compensation()
 
+    def _cyl_mesh_kwargs(self, color, opacity):
+        """Return add_mesh kwargs that keep cylinders visible against any
+        volume rendering.
+
+        Switches between solid and wireframe via combo_cyl_style. In both
+        cases lighting is on with ambient near 1 and diffuse near 0, which
+        makes the surface read as a flat self-illuminated patch — the
+        volume's ray integration can't drag the color into grey or
+        wash it into a colorful cmap.
+        """
+        wireframe = (hasattr(self, 'combo_cyl_style')
+                     and self.combo_cyl_style.currentIndex() == 1)
+        kwargs = dict(
+            color=color,
+            opacity=opacity,
+            lighting=True,
+            ambient=0.95,
+            diffuse=0.05,
+            specular=0.0,
+            reset_camera=False,
+        )
+        if wireframe:
+            kwargs.update(style='wireframe', line_width=2)
+        return kwargs
+
     def _apply_cylinder_blend_compensation(self):
         """Tune cylinder material properties so they survive Average and
         Additive volume blends.
@@ -2847,16 +2951,14 @@ class CylinderApp(QtWidgets.QMainWindow):
         mode_str = self.combo_render.currentText()
         is_avg = "Average" in mode_str
         is_add = "Additive" in mode_str
-        # In Composite/MIP/MinIP, default phong material looks fine.
-        ambient = 0.0; diffuse = 1.0; specular = 0.0
+        # Default is already self-illuminated (ambient=0.95, diffuse=0.05)
+        # via _cyl_mesh_kwargs; nudge further for Avg/Add which pull
+        # neighbouring fragments hard.
+        ambient, diffuse, specular = 0.95, 0.05, 0.0
         if is_avg:
-            # Average pulls everything toward mean grey — push cylinders
-            # to almost-flat self-illumination so their hue dominates.
-            ambient = 0.95; diffuse = 0.05; specular = 0.0
+            ambient, diffuse = 0.99, 0.01
         elif is_add:
-            # Additive sums; cylinders that were diffusely lit get washed
-            # to white. Lower diffuse, modest ambient.
-            ambient = 0.7; diffuse = 0.2; specular = 0.0
+            ambient, diffuse = 0.85, 0.05
 
         for actor in (self.actor_std, self.actor_exp,
                       self.actor_man, self.actor_man_exp,
