@@ -924,11 +924,36 @@ class CylinderApp(QtWidgets.QMainWindow):
         scroll.setFixedWidth(440)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         panel = QtWidgets.QWidget()
-        # Tighten group-box padding so the sidebar fits common laptop heights.
+        # Each top-level QGroupBox gets a clearly-bordered frame and a
+        # tab-style title, so section boundaries (Appearance / Add Cylinders
+        # / Grid Settings / Cylinders / Export & Registration) read as
+        # separate panels rather than just bold text. The styling stops at
+        # the panel container so it doesn't leak into nested QGroupBoxes
+        # inside dialogs.
         panel.setStyleSheet(
-            "QGroupBox { margin-top: 6px; padding-top: 8px; }"
-            "QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 3px; }"
-            "QPushButton { padding: 3px 6px; }"
+            """
+            QGroupBox {
+                margin-top: 14px;
+                padding: 12px 6px 6px 6px;
+                border: 1px solid #5a6470;
+                border-radius: 5px;
+                background-color: #f4f5f7;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 8px;
+                padding: 2px 10px;
+                background-color: #2f3a48;
+                color: #ffffff;
+                border: 1px solid #2f3a48;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                font-weight: bold;
+                font-size: 10pt;
+            }
+            QPushButton { padding: 3px 6px; }
+            """
         )
         scroll.setWidget(panel)
         layout = QtWidgets.QVBoxLayout(panel)
@@ -1190,6 +1215,51 @@ class CylinderApp(QtWidgets.QMainWindow):
         arrows_w.setLayout(v_arrows)
         h_vol.addWidget(arrows_w)
         lo.addLayout(h_vol)
+
+        # Contrast: window low/high + gamma. Three compact rows; values
+        # feed the opacity transfer function build in update_opacity.
+        h_lo = QtWidgets.QHBoxLayout()
+        h_lo.setContentsMargins(0, 0, 0, 0)
+        h_lo.setSpacing(4)
+        h_lo.addWidget(QtWidgets.QLabel("Lo:"))
+        self.slider_clim_lo = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider_clim_lo.setRange(0, 100)
+        self.slider_clim_lo.setValue(0)
+        self.slider_clim_lo.setToolTip(
+            "Window low — % of clim. Voxels below this map to 0 opacity."
+        )
+        self.slider_clim_lo.valueChanged.connect(self._on_clim_slider_changed)
+        h_lo.addWidget(self.slider_clim_lo)
+        h_hi = QtWidgets.QHBoxLayout()
+        h_hi.setContentsMargins(0, 0, 0, 0)
+        h_hi.setSpacing(4)
+        h_hi.addWidget(QtWidgets.QLabel("Hi:"))
+        self.slider_clim_hi = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider_clim_hi.setRange(0, 100)
+        self.slider_clim_hi.setValue(100)
+        self.slider_clim_hi.setToolTip(
+            "Window high — % of clim. Voxels above this map to full opacity."
+        )
+        self.slider_clim_hi.valueChanged.connect(self._on_clim_slider_changed)
+        h_hi.addWidget(self.slider_clim_hi)
+        lo.addLayout(h_lo)
+        lo.addLayout(h_hi)
+
+        h_gamma = QtWidgets.QHBoxLayout()
+        h_gamma.setContentsMargins(0, 0, 0, 0)
+        h_gamma.setSpacing(4)
+        h_gamma.addWidget(QtWidgets.QLabel("γ:"))
+        self.slider_gamma = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        # Slider int 0–100 maps to gamma in [0.2, 5.0] log-spaced; 50 = 1.0.
+        self.slider_gamma.setRange(0, 100)
+        self.slider_gamma.setValue(50)
+        self.slider_gamma.setToolTip(
+            "Gamma. <1 brightens mid-tones, >1 darkens them. "
+            "Slider center = γ = 1.0 (no change)."
+        )
+        self.slider_gamma.valueChanged.connect(self.update_opacity)
+        h_gamma.addWidget(self.slider_gamma)
+        lo.addLayout(h_gamma)
 
         # Reference grid controls — a floor grid in the volume's coordinate
         # frame, useful for gauging distances against the rendered scene.
@@ -2833,29 +2903,86 @@ class CylinderApp(QtWidgets.QMainWindow):
             otf.RemoveAllPoints()
             curve = (self.combo_opacity_curve.currentText()
                      if hasattr(self, 'combo_opacity_curve') else "Linear")
-            for v, op in self._build_opacity_points(curve, self.clim, vol_op):
+            window = self._active_clim_window()
+            gamma = self._gamma_value()
+            for v, op in self._build_opacity_points(curve, window, vol_op, gamma):
                 otf.AddPoint(v, op)
 
         self.plotter.render()
 
+    def _active_clim_window(self):
+        """Sub-window of self.clim selected by the Lo / Hi sliders.
+
+        Slider values are percent of the full clim range; Lo is clamped to
+        be strictly less than Hi (with a 1% pad) so the transfer function
+        always has positive width.
+        """
+        lo_full, hi_full = float(self.clim[0]), float(self.clim[1])
+        span = hi_full - lo_full
+        if span <= 0:
+            return lo_full, hi_full
+        lo_pct = self.slider_clim_lo.value() / 100.0 if hasattr(self, 'slider_clim_lo') else 0.0
+        hi_pct = self.slider_clim_hi.value() / 100.0 if hasattr(self, 'slider_clim_hi') else 1.0
+        if hi_pct <= lo_pct:
+            hi_pct = min(1.0, lo_pct + 0.01)
+        return lo_full + lo_pct * span, lo_full + hi_pct * span
+
+    def _gamma_value(self):
+        """Map slider int 0..100 to gamma in [0.2, 5.0] log-spaced; 50 = 1.0."""
+        if not hasattr(self, 'slider_gamma'):
+            return 1.0
+        norm = (self.slider_gamma.value() - 50) / 50.0  # -1..1
+        return float(10.0 ** (norm * np.log10(5.0)))
+
+    def _on_clim_slider_changed(self):
+        # Keep Lo strictly below Hi (pad by 1 unit on the slider scale) so
+        # dragging one past the other doesn't collapse the window.
+        if self.slider_clim_lo.value() >= self.slider_clim_hi.value():
+            sender = self.sender()
+            if sender is self.slider_clim_lo:
+                self.slider_clim_hi.blockSignals(True)
+                self.slider_clim_hi.setValue(min(100, self.slider_clim_lo.value() + 1))
+                self.slider_clim_hi.blockSignals(False)
+            else:
+                self.slider_clim_lo.blockSignals(True)
+                self.slider_clim_lo.setValue(max(0, self.slider_clim_hi.value() - 1))
+                self.slider_clim_lo.blockSignals(False)
+        self.update_opacity()
+
     @staticmethod
-    def _build_opacity_points(curve, clim, vol_op):
+    def _build_opacity_points(curve, clim, vol_op, gamma=1.0):
         """Return a list of (scalar_value, opacity) tuples for the volume's
         scalar opacity transfer function.
 
-        - Linear: ramp from clim[0]→0 to clim[1]→vol_op (matches old behavior).
+        - Linear: ramp from clim[0]→0 to clim[1]→vol_op, then opacity is
+          raised to power 1/gamma so γ < 1 brightens mid-tones and γ > 1
+          darkens them.
         - Sigmoid (gentle/medium/sharp): S-curve sampled at 32 points; center
           at the dynamic-range midpoint, sharper variants suppress more of
           the lower range — useful for hiding empty resin around an object.
         - Threshold (low/mid/high): hard cutoff at 30% / 50% / 70% of the
           range; below the cutoff opacity is 0, above it is vol_op.
+
+        For all non-Linear curves, gamma is applied as a final post-pass
+        on the opacity values (anchored 0 stays 0, anchored vol_op stays
+        vol_op).
         """
         lo, hi = float(clim[0]), float(clim[1])
         if hi <= lo:
             return [(lo, 0.0), (lo + 1.0, vol_op)]
+        gamma = max(float(gamma), 1e-6)
+
+        def apply_gamma(opacities):
+            if abs(gamma - 1.0) < 1e-6 or vol_op <= 0:
+                return opacities
+            ratio = np.asarray(opacities, dtype=float) / vol_op
+            ratio = np.clip(ratio, 0.0, 1.0)
+            return (ratio ** (1.0 / gamma) * vol_op).tolist()
 
         if curve == "Linear":
-            return [(lo, 0.0), (hi, vol_op)]
+            xs = np.linspace(lo, hi, 16)
+            ys = np.linspace(0.0, vol_op, 16)
+            return list(zip(xs.tolist(), apply_gamma(ys)))
 
         if curve.startswith("Threshold"):
             frac = {"Threshold (low)": 0.30,
@@ -2878,10 +3005,9 @@ class CylinderApp(QtWidgets.QMainWindow):
         xs = np.linspace(lo, hi, n)
         norm = (xs - lo) / (hi - lo) - 0.5  # in [-0.5, 0.5]
         y = 1.0 / (1.0 + np.exp(-k * norm))
-        # Anchor the curve so opacity is exactly 0 at lo and vol_op at hi.
         y = (y - y[0]) / max(y[-1] - y[0], 1e-12)
         y *= vol_op
-        return list(zip(xs.tolist(), y.tolist()))
+        return list(zip(xs.tolist(), apply_gamma(y.tolist())))
 
     def export_coordinates(self):
         pts = self.get_all_active_points()
