@@ -6,6 +6,7 @@ from scan_plan.solver import (
     solve_bbox_grids,
     calculate_contrast_limits,
     solve_line_coverage,
+    solve_parallelogram_coverage,
     cylinder_dims,
 )
 
@@ -170,6 +171,62 @@ class TestSolveLineCoverage:
         pts_b, _, _ = solve_line_coverage([ln_b], 20, CFG)
         pts_both, _, _ = solve_line_coverage([ln_a, ln_b], 20, CFG)
         assert len(pts_both) == len(pts_a) + len(pts_b)
+
+
+class TestSolveParallelogramCoverage:
+    def test_empty(self):
+        pts, ds, _ = solve_parallelogram_coverage([], 20, CFG)
+        assert len(pts) == 0
+        assert ds[0] > 0
+
+    def test_axis_aligned_rectangle_in_xy(self):
+        # Flat rectangle in XY: P0 at origin, P1 along X, P2 along Y.
+        (D, H), _ = cylinder_dims(20, CFG)
+        p0 = (0.0, 0.0, 0.0)
+        p1 = (10 * D, 0.0, 0.0)
+        p2 = (0.0, 10 * D, 0.0)
+        pts, _, _ = solve_parallelogram_coverage([(p0, p1, p2)], 20, CFG)
+        # Both edges are XY-only so spacing along each = D.
+        assert len(pts) > 0
+        assert np.allclose(pts[:, 2], 0.0)
+        # Ensure all points are within the rectangle (small tolerance).
+        eps = 1e-6
+        assert np.all(pts[:, 0] >= -eps) and np.all(pts[:, 0] <= 10 * D + eps)
+        assert np.all(pts[:, 1] >= -eps) and np.all(pts[:, 1] <= 10 * D + eps)
+
+    def test_density_scales_count(self):
+        (D, _), _ = cylinder_dims(20, CFG)
+        plg = ((0.0, 0.0, 0.0), (10 * D, 0.0, 0.0), (0.0, 10 * D, 0.0))
+        pts1, _, _ = solve_parallelogram_coverage([plg], 20, CFG, density=1.0)
+        pts2, _, _ = solve_parallelogram_coverage([plg], 20, CFG, density=2.0)
+        # Doubling density approximately quadruples count (2× per axis).
+        assert len(pts2) > len(pts1)
+
+    def test_tilted_parallelogram_no_zero_norm(self):
+        # Edge with both XY and Z components — anisotropic spacing kicks in.
+        (D, H), _ = cylinder_dims(20, CFG)
+        p0 = (0.0, 0.0, 0.0)
+        p1 = (10 * D, 0.0, 0.0)
+        p2 = (0.0, 5 * D, 5 * H)  # tilted into Z
+        pts, _, _ = solve_parallelogram_coverage([(p0, p1, p2)], 20, CFG)
+        assert len(pts) > 0  # doesn't crash; produces sensible grid
+
+    def test_degenerate_collinear(self):
+        # P2 == P0 → line, not parallelogram. Fallback should still return
+        # at least one cylinder (along u1).
+        (D, _), _ = cylinder_dims(20, CFG)
+        p0 = (0.0, 0.0, 0.0)
+        p1 = (10 * D, 0.0, 0.0)
+        p2 = (0.0, 0.0, 0.0)
+        pts, _, _ = solve_parallelogram_coverage([(p0, p1, p2)], 20, CFG)
+        assert len(pts) >= 1
+
+    def test_zero_size(self):
+        # All three points identical.
+        p = (1.0, 2.0, 3.0)
+        pts, _, _ = solve_parallelogram_coverage([(p, p, p)], 20, CFG)
+        assert len(pts) == 1
+        assert np.allclose(pts[0], np.array(p))
 
 
 class TestCalculateContrastLimits:

@@ -209,3 +209,100 @@ def solve_line_coverage(line_list, scan_res_nm, config, density=1.0):
     pts = np.array(out)
     sort_idx = np.lexsort((pts[:, 0], pts[:, 1], pts[:, 2]))
     return pts[sort_idx], (D_std, H_std), (D_exp, H_exp)
+
+
+def _half_reach_along(unit_vec, R, half_h_z):
+    """Half-length a cylinder-on-line covers along *unit_vec* before exiting
+    the cylinder surface. unit_vec must already be unit-length.
+    """
+    dx, dy, dz = unit_vec
+    radial = np.hypot(dx, dy)
+    cand = []
+    if radial > 1e-12:
+        cand.append(R / radial)
+    if abs(dz) > 1e-12:
+        cand.append(half_h_z / abs(dz))
+    return min(cand) if cand else float("inf")
+
+
+def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0):
+    """Tile cylinders across each parallelogram defined by three corners.
+
+    Each entry is a tuple (p0, p1, p2). The parallelogram has corners
+    P0, P1, P1+(P2-P0), P2 — i.e. P0–P1 is one edge, P0–P2 is the other.
+    Cylinders are placed on a regular 2D grid spanning the (u1, u2) plane.
+
+    Spacing along each edge follows the same anisotropic logic as
+    solve_line_coverage: how far along the unit edge direction a cylinder
+    extends before its surface cuts the line. *density* > 1 packs tighter
+    (overlap), *density* < 1 leaves gaps. Default 1 = touching, no overlap
+    along each edge axis.
+
+    Returns (points, (D_std, H_std), (D_exp, H_exp)).
+    """
+    (D_std, H_std), (D_exp, H_exp) = cylinder_dims(scan_res_nm, config)
+    if not plg_list or D_std <= 0 or H_std <= 0:
+        return np.empty((0, 3)), (D_std, H_std), (D_exp, H_exp)
+
+    R = D_std / 2.0
+    half_h_z = H_std / 2.0
+    density = max(float(density), 1e-6)
+
+    out = []
+    for p0, p1, p2 in plg_list:
+        a = np.asarray(p0, dtype=float)
+        b = np.asarray(p1, dtype=float)
+        c = np.asarray(p2, dtype=float)
+        u1 = b - a
+        u2 = c - a
+        L1 = float(np.linalg.norm(u1))
+        L2 = float(np.linalg.norm(u2))
+        if L1 == 0 and L2 == 0:
+            out.append(a)
+            continue
+        if L1 == 0:
+            # Degenerates to a line along u2 — defer to line packing logic
+            half2 = _half_reach_along(u2 / L2, R, half_h_z)
+            spacing2 = (2.0 * half2) / density
+            n2 = max(1, int(np.ceil((L2 - half2) / spacing2)) + 1)
+            offset2 = max(0.0, (L2 - (n2 - 1) * spacing2) / 2.0)
+            for j in range(n2):
+                out.append(a + (offset2 + j * spacing2) * (u2 / L2))
+            continue
+        if L2 == 0:
+            half1 = _half_reach_along(u1 / L1, R, half_h_z)
+            spacing1 = (2.0 * half1) / density
+            n1 = max(1, int(np.ceil((L1 - half1) / spacing1)) + 1)
+            offset1 = max(0.0, (L1 - (n1 - 1) * spacing1) / 2.0)
+            for i in range(n1):
+                out.append(a + (offset1 + i * spacing1) * (u1 / L1))
+            continue
+
+        u1h = u1 / L1
+        u2h = u2 / L2
+        half1 = _half_reach_along(u1h, R, half_h_z)
+        half2 = _half_reach_along(u2h, R, half_h_z)
+        spacing1 = (2.0 * half1) / density
+        spacing2 = (2.0 * half2) / density
+        if spacing1 <= 0 or spacing2 <= 0:
+            out.append(a)
+            continue
+
+        n1 = max(1, int(np.ceil((L1 - half1) / spacing1)) + 1)
+        n2 = max(1, int(np.ceil((L2 - half2) / spacing2)) + 1)
+        used1 = (n1 - 1) * spacing1
+        used2 = (n2 - 1) * spacing2
+        offset1 = max(0.0, (L1 - used1) / 2.0)
+        offset2 = max(0.0, (L2 - used2) / 2.0)
+
+        for j in range(n2):
+            for i in range(n1):
+                t1 = offset1 + i * spacing1
+                t2 = offset2 + j * spacing2
+                out.append(a + t1 * u1h + t2 * u2h)
+
+    if not out:
+        return np.empty((0, 3)), (D_std, H_std), (D_exp, H_exp)
+    pts = np.array(out)
+    sort_idx = np.lexsort((pts[:, 0], pts[:, 1], pts[:, 2]))
+    return pts[sort_idx], (D_std, H_std), (D_exp, H_exp)
