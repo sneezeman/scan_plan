@@ -254,22 +254,33 @@ def _tile_axis(L, half_reach, spacing, mode):
     return n, base + extra / 2.0
 
 
-def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0, mode="center"):
-    """Tile cylinders across each parallelogram defined by three corners.
+def solve_parallelepiped_coverage(plp_list, scan_res_nm, config, density=1.0, mode="center"):
+    """Tile cylinders inside each parallelepiped defined by three corners.
 
-    Each entry is a tuple (p0, p1, p2). The parallelogram has corners
-    P0, P1, P1+(P2-P0), P2 — i.e. P0–P1 is one edge, P0–P2 is the other.
-    Cylinders are placed on a regular 2D grid spanning the (u1, u2) plane.
+    Each entry is a tuple (a, c, a1) where:
+        A   — origin corner.
+        C   — diagonally opposite corner of the *base*. The base is
+              axis-aligned in the XY plane: the two base edges run
+              along ±X and ±Y from A so that the base is the rectangle
+              with opposite corners (Ax, Ay) and (Cx, Cy). Cz is taken
+              from Az for the base plane.
+        A1  — top corner above A. The third edge AA₁ = A1 - A can have
+              any direction (so the box can tilt arbitrarily into Z or
+              even shear in XY).
 
-    Spacing along each edge follows the same anisotropic logic as
-    solve_line_coverage. *density* > 1 packs tighter (overlap), *density*
-    < 1 leaves gaps. *mode* mirrors the bbox Fill Mode (strict / center /
-    coverage), applied independently to each edge axis.
+    The 8 box corners are A + i*u1 + j*u2 + k*u3 for i,j,k ∈ {0,1},
+    with u1 = (Cx-Ax, 0, 0), u2 = (0, Cy-Ay, 0), u3 = A1-A.
+
+    Cylinders tile the 3D volume. Spacing along each edge follows the
+    same anisotropic logic as solve_line_coverage (radial reach for
+    XY, axial reach for Z), divided by *density*. *mode* mirrors the
+    bbox Fill Mode (strict / center / coverage), applied independently
+    to each of the three edge axes.
 
     Returns (points, (D_std, H_std), (D_exp, H_exp)).
     """
     (D_std, H_std), (D_exp, H_exp) = cylinder_dims(scan_res_nm, config)
-    if not plg_list or D_std <= 0 or H_std <= 0:
+    if not plp_list or D_std <= 0 or H_std <= 0:
         return np.empty((0, 3)), (D_std, H_std), (D_exp, H_exp)
 
     R = D_std / 2.0
@@ -278,49 +289,59 @@ def solve_parallelogram_coverage(plg_list, scan_res_nm, config, density=1.0, mod
     mode = (mode or "center").lower()
 
     out = []
-    for p0, p1, p2 in plg_list:
-        a = np.asarray(p0, dtype=float)
-        b = np.asarray(p1, dtype=float)
-        c = np.asarray(p2, dtype=float)
-        u1 = b - a
-        u2 = c - a
+    for a_in, c_in, a1_in in plp_list:
+        a = np.asarray(a_in, dtype=float)
+        c = np.asarray(c_in, dtype=float)
+        a1 = np.asarray(a1_in, dtype=float)
+
+        # Three edge vectors. u1, u2 are constrained to ±X / ±Y so the
+        # base is an axis-aligned rectangle. u3 is free.
+        u1 = np.array([c[0] - a[0], 0.0, 0.0])
+        u2 = np.array([0.0, c[1] - a[1], 0.0])
+        u3 = a1 - a
         L1 = float(np.linalg.norm(u1))
         L2 = float(np.linalg.norm(u2))
-        if L1 == 0 and L2 == 0:
+        L3 = float(np.linalg.norm(u3))
+
+        if L1 == 0 and L2 == 0 and L3 == 0:
             out.append(a)
             continue
-        if L1 == 0:
-            # Degenerates to a line along u2.
-            half2 = _half_reach_along(u2 / L2, R, half_h_z)
-            spacing2 = (2.0 * half2) / density
-            n2, off2 = _tile_axis(L2, half2, spacing2, mode)
+
+        # Per-axis tiling. Skip degenerate axes (length 0) by treating
+        # them as a single anchor at offset 0.
+        def _axis_params(u, L):
+            if L <= 0:
+                return None
+            uh = u / L
+            half = _half_reach_along(uh, R, half_h_z)
+            spacing = (2.0 * half) / density
+            n, off = _tile_axis(L, half, spacing, mode)
+            return uh, spacing, n, off
+
+        ax1 = _axis_params(u1, L1)
+        ax2 = _axis_params(u2, L2)
+        ax3 = _axis_params(u3, L3)
+
+        # If any nondegenerate axis returns 0 cylinders (e.g. strict mode
+        # on an edge shorter than 2*half_reach), the whole box yields 0.
+        if any(ax is not None and ax[2] == 0 for ax in (ax1, ax2, ax3)):
+            continue
+
+        n1 = ax1[2] if ax1 else 1
+        n2 = ax2[2] if ax2 else 1
+        n3 = ax3[2] if ax3 else 1
+
+        for k in range(n3):
             for j in range(n2):
-                out.append(a + (off2 + j * spacing2) * (u2 / L2))
-            continue
-        if L2 == 0:
-            half1 = _half_reach_along(u1 / L1, R, half_h_z)
-            spacing1 = (2.0 * half1) / density
-            n1, off1 = _tile_axis(L1, half1, spacing1, mode)
-            for i in range(n1):
-                out.append(a + (off1 + i * spacing1) * (u1 / L1))
-            continue
-
-        u1h = u1 / L1
-        u2h = u2 / L2
-        half1 = _half_reach_along(u1h, R, half_h_z)
-        half2 = _half_reach_along(u2h, R, half_h_z)
-        spacing1 = (2.0 * half1) / density
-        spacing2 = (2.0 * half2) / density
-        n1, off1 = _tile_axis(L1, half1, spacing1, mode)
-        n2, off2 = _tile_axis(L2, half2, spacing2, mode)
-        if n1 == 0 or n2 == 0:
-            continue
-
-        for j in range(n2):
-            for i in range(n1):
-                t1 = off1 + i * spacing1
-                t2 = off2 + j * spacing2
-                out.append(a + t1 * u1h + t2 * u2h)
+                for i in range(n1):
+                    pos = a.copy()
+                    if ax1 is not None:
+                        pos = pos + (ax1[3] + i * ax1[1]) * ax1[0]
+                    if ax2 is not None:
+                        pos = pos + (ax2[3] + j * ax2[1]) * ax2[0]
+                    if ax3 is not None:
+                        pos = pos + (ax3[3] + k * ax3[1]) * ax3[0]
+                    out.append(pos)
 
     if not out:
         return np.empty((0, 3)), (D_std, H_std), (D_exp, H_exp)

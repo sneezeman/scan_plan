@@ -6,7 +6,7 @@ from scan_plan.solver import (
     solve_bbox_grids,
     calculate_contrast_limits,
     solve_line_coverage,
-    solve_parallelogram_coverage,
+    solve_parallelepiped_coverage,
     cylinder_dims,
 )
 
@@ -173,78 +173,74 @@ class TestSolveLineCoverage:
         assert len(pts_both) == len(pts_a) + len(pts_b)
 
 
-class TestSolveParallelogramCoverage:
+class TestSolveParallelepipedCoverage:
     def test_empty(self):
-        pts, ds, _ = solve_parallelogram_coverage([], 20, CFG)
+        pts, ds, _ = solve_parallelepiped_coverage([], 20, CFG)
         assert len(pts) == 0
         assert ds[0] > 0
 
-    def test_axis_aligned_rectangle_in_xy(self):
-        # Flat rectangle in XY: P0 at origin, P1 along X, P2 along Y.
+    def test_axis_aligned_box(self):
+        # Axis-aligned box: A=origin, C=opposite corner of base, A1
+        # straight up. u1 along X, u2 along Y, u3 along Z.
         (D, H), _ = cylinder_dims(20, CFG)
-        p0 = (0.0, 0.0, 0.0)
-        p1 = (10 * D, 0.0, 0.0)
-        p2 = (0.0, 10 * D, 0.0)
-        pts, _, _ = solve_parallelogram_coverage([(p0, p1, p2)], 20, CFG)
-        # Both edges are XY-only so spacing along each = D.
+        a = (0.0, 0.0, 0.0)
+        c = (10 * D, 10 * D, 0.0)
+        a1 = (0.0, 0.0, 10 * H)
+        pts, _, _ = solve_parallelepiped_coverage([(a, c, a1)], 20, CFG)
         assert len(pts) > 0
-        assert np.allclose(pts[:, 2], 0.0)
-        # Ensure all points are within the rectangle (small tolerance).
+        # All points must lie inside the box (with default Center mode
+        # they may sit on the surface but not far outside).
         eps = 1e-6
         assert np.all(pts[:, 0] >= -eps) and np.all(pts[:, 0] <= 10 * D + eps)
         assert np.all(pts[:, 1] >= -eps) and np.all(pts[:, 1] <= 10 * D + eps)
+        assert np.all(pts[:, 2] >= -eps) and np.all(pts[:, 2] <= 10 * H + eps)
 
     def test_density_scales_count(self):
-        (D, _), _ = cylinder_dims(20, CFG)
-        plg = ((0.0, 0.0, 0.0), (10 * D, 0.0, 0.0), (0.0, 10 * D, 0.0))
-        pts1, _, _ = solve_parallelogram_coverage([plg], 20, CFG, density=1.0)
-        pts2, _, _ = solve_parallelogram_coverage([plg], 20, CFG, density=2.0)
-        # Doubling density approximately quadruples count (2× per axis).
+        (D, H), _ = cylinder_dims(20, CFG)
+        plp = ((0.0, 0.0, 0.0), (10 * D, 10 * D, 0.0), (0.0, 0.0, 10 * H))
+        pts1, _, _ = solve_parallelepiped_coverage([plp], 20, CFG, density=1.0)
+        pts2, _, _ = solve_parallelepiped_coverage([plp], 20, CFG, density=2.0)
         assert len(pts2) > len(pts1)
 
-    def test_tilted_parallelogram_no_zero_norm(self):
-        # Edge with both XY and Z components — anisotropic spacing kicks in.
+    def test_tilted_third_edge(self):
+        # A1 - A has XY components — third edge tilts into the base plane.
         (D, H), _ = cylinder_dims(20, CFG)
-        p0 = (0.0, 0.0, 0.0)
-        p1 = (10 * D, 0.0, 0.0)
-        p2 = (0.0, 5 * D, 5 * H)  # tilted into Z
-        pts, _, _ = solve_parallelogram_coverage([(p0, p1, p2)], 20, CFG)
-        assert len(pts) > 0  # doesn't crash; produces sensible grid
+        a = (0.0, 0.0, 0.0)
+        c = (10 * D, 10 * D, 0.0)
+        a1 = (5 * D, 0.0, 10 * H)  # tilted in X
+        pts, _, _ = solve_parallelepiped_coverage([(a, c, a1)], 20, CFG)
+        assert len(pts) > 0
 
-    def test_degenerate_collinear(self):
-        # P2 == P0 → line, not parallelogram. Fallback should still return
-        # at least one cylinder (along u1).
+    def test_flat_box_zero_height(self):
+        # A1 == A → u3 = 0. Box collapses to its base; tile in 2D.
         (D, _), _ = cylinder_dims(20, CFG)
-        p0 = (0.0, 0.0, 0.0)
-        p1 = (10 * D, 0.0, 0.0)
-        p2 = (0.0, 0.0, 0.0)
-        pts, _, _ = solve_parallelogram_coverage([(p0, p1, p2)], 20, CFG)
-        assert len(pts) >= 1
+        a = (0.0, 0.0, 0.0)
+        c = (10 * D, 10 * D, 0.0)
+        a1 = (0.0, 0.0, 0.0)
+        pts, _, _ = solve_parallelepiped_coverage([(a, c, a1)], 20, CFG)
+        assert len(pts) > 0
+        assert np.allclose(pts[:, 2], 0.0)
 
     def test_zero_size(self):
-        # All three points identical.
         p = (1.0, 2.0, 3.0)
-        pts, _, _ = solve_parallelogram_coverage([(p, p, p)], 20, CFG)
+        pts, _, _ = solve_parallelepiped_coverage([(p, p, p)], 20, CFG)
         assert len(pts) == 1
         assert np.allclose(pts[0], np.array(p))
 
     def test_mode_ordering(self):
-        # strict ≤ center ≤ coverage on the same parallelogram.
-        (D, _), _ = cylinder_dims(20, CFG)
-        plg = ((0.0, 0.0, 0.0), (10 * D, 0.0, 0.0), (0.0, 10 * D, 0.0))
+        (D, H), _ = cylinder_dims(20, CFG)
+        plp = ((0.0, 0.0, 0.0), (10 * D, 10 * D, 0.0), (0.0, 0.0, 10 * H))
         ns = []
         for mode in ("strict", "center", "coverage"):
-            pts, _, _ = solve_parallelogram_coverage([plg], 20, CFG, mode=mode)
+            pts, _, _ = solve_parallelepiped_coverage([plp], 20, CFG, mode=mode)
             ns.append(len(pts))
         assert ns[0] <= ns[1] <= ns[2]
 
     def test_strict_excludes_when_too_small(self):
-        # Parallelogram smaller than one cylinder → strict yields 0,
-        # center yields >= 1.
-        (D, _), _ = cylinder_dims(20, CFG)
-        small = ((0.0, 0.0, 0.0), (D / 4, 0.0, 0.0), (0.0, D / 4, 0.0))
-        pts_strict, _, _ = solve_parallelogram_coverage([small], 20, CFG, mode="strict")
-        pts_center, _, _ = solve_parallelogram_coverage([small], 20, CFG, mode="center")
+        (D, H), _ = cylinder_dims(20, CFG)
+        small = ((0.0, 0.0, 0.0), (D / 4, D / 4, 0.0), (0.0, 0.0, H / 4))
+        pts_strict, _, _ = solve_parallelepiped_coverage([small], 20, CFG, mode="strict")
+        pts_center, _, _ = solve_parallelepiped_coverage([small], 20, CFG, mode="center")
         assert len(pts_strict) == 0
         assert len(pts_center) >= 1
 

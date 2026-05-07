@@ -18,7 +18,7 @@ from scan_plan.io import parse_nml, detect_tiff_dims, update_user_config_keys
 from scan_plan.solver import (
     solve_bbox_grids,
     solve_line_coverage,
-    solve_parallelogram_coverage,
+    solve_parallelepiped_coverage,
 )
 
 
@@ -858,13 +858,14 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.line_density = 1.0
         self.active_line_cyl_mask = np.empty((0,), dtype=bool)
 
-        # Parallelogram coverage: each entry is (p0, p1, p2). Cylinder
-        # centers are tiled across the parallelogram with corners
-        # P0, P1, P1+(P2-P0), P2.
-        self.parallelograms = []
-        self.parallelogram_points = np.empty((0, 3))
-        self.parallelogram_density = 1.0
-        self.active_plg_mask = []         # one bool per parallelogram
+        # Parallelepiped coverage: each entry is (A, C, A1) where
+        # u1 = (Cx-Ax, 0, 0), u2 = (0, Cy-Ay, 0), u3 = A1 - A define the
+        # three edge vectors of an axis-aligned-base, free-third-edge
+        # parallelepiped (a "tilted box").
+        self.parallelepipeds = []
+        self.parallelepiped_points = np.empty((0, 3))
+        self.parallelepiped_density = 1.0
+        self.active_plg_mask = []         # one bool per parallelepiped
         self.active_plg_cyl_mask = np.empty((0,), dtype=bool)
 
         # Single-slot undo stash per category. Each holds the most recent
@@ -1040,13 +1041,13 @@ class CylinderApp(QtWidgets.QMainWindow):
         line_lo.addStretch()
         tabs.addTab(line_tab, "Line Coverage")
 
-        # --- Tab: Parallelogram Coverage ---
+        # --- Tab: Parallelepiped Coverage ---
         plg_tab = QtWidgets.QWidget()
         plg_lo = QtWidgets.QVBoxLayout(plg_tab)
         plg_lo.setContentsMargins(4, 4, 4, 4)
-        plg_lo.addWidget(self._create_parallelogram_content())
+        plg_lo.addWidget(self._create_parallelepiped_content())
         plg_lo.addStretch()
-        tabs.addTab(plg_tab, "Parallelogram")
+        tabs.addTab(plg_tab, "Parallelepiped")
 
         # --- Tab: Manual Centers ---
         man_tab = QtWidgets.QWidget()
@@ -1594,48 +1595,49 @@ class CylinderApp(QtWidgets.QMainWindow):
                 f"{int(p2[0])}, {int(p2[1])}, {int(p2[2])}"
             )
 
-    def _create_parallelogram_content(self):
+    def _create_parallelepiped_content(self):
         widget = QtWidgets.QWidget()
         lo = QtWidgets.QVBoxLayout(widget)
         lo.setContentsMargins(10, 5, 10, 5)
         lo.setSpacing(2)
 
         info = QtWidgets.QLabel(
-            "Define a tilted parallelogram by three corners:\n"
-            "  P0 — origin corner\n"
-            "  P1 — other end of the base edge (P0→P1)\n"
-            "  P2 — other end of the side edge (P0→P2)\n"
-            "Cylinders tile the parallelogram surface; thickness comes from "
-            "the cylinder height H."
+            "Define a parallelepiped (tilted 3D box) by three corners:\n"
+            "  A   — origin corner.\n"
+            "  C   — opposite diagonal of the base. The base is an "
+            "axis-aligned rectangle in XY between A and C.\n"
+            "  A₁  — top corner above A. The third edge AA₁ can tilt in "
+            "any direction.\n"
+            "Cylinders fill the box volume."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: #555;")
         lo.addWidget(info)
 
         h0 = QtWidgets.QHBoxLayout()
-        h0.addWidget(QtWidgets.QLabel("P0 (x,y,z):"))
+        h0.addWidget(QtWidgets.QLabel("A (x,y,z):"))
         self.txt_plg_p0 = QtWidgets.QLineEdit()
         self.txt_plg_p0.setPlaceholderText("e.g. 100, 100, 50")
         h0.addWidget(self.txt_plg_p0)
         lo.addLayout(h0)
 
         h1 = QtWidgets.QHBoxLayout()
-        h1.addWidget(QtWidgets.QLabel("P1 (x,y,z):"))
+        h1.addWidget(QtWidgets.QLabel("C (x,y,z):"))
         self.txt_plg_p1 = QtWidgets.QLineEdit()
-        self.txt_plg_p1.setPlaceholderText("e.g. 400, 100, 50")
+        self.txt_plg_p1.setPlaceholderText("e.g. 400, 300, 50")
         h1.addWidget(self.txt_plg_p1)
         lo.addLayout(h1)
 
         h2 = QtWidgets.QHBoxLayout()
-        h2.addWidget(QtWidgets.QLabel("P2 (x,y,z):"))
+        h2.addWidget(QtWidgets.QLabel("A₁ (x,y,z):"))
         self.txt_plg_p2 = QtWidgets.QLineEdit()
-        self.txt_plg_p2.setPlaceholderText("e.g. 100, 300, 70")
+        self.txt_plg_p2.setPlaceholderText("e.g. 130, 100, 200")
         h2.addWidget(self.txt_plg_p2)
         lo.addLayout(h2)
 
         h3 = QtWidgets.QHBoxLayout()
-        b_add = QtWidgets.QPushButton("Add Parallelogram")
-        b_add.clicked.connect(self.add_parallelogram_from_text)
+        b_add = QtWidgets.QPushButton("Add Parallelepiped")
+        b_add.clicked.connect(self.add_parallelepiped_from_text)
         b_clr = QtWidgets.QPushButton("Clear Inputs")
         b_clr.clicked.connect(lambda: (self.txt_plg_p0.clear(),
                                        self.txt_plg_p1.clear(),
@@ -1650,14 +1652,14 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.combo_plg_mode.addItems(["Strict", "Center", "Coverage"])
         self.combo_plg_mode.setCurrentIndex(1)  # Center default
         self.combo_plg_mode.setToolTip(
-            "Strict: cylinder fully inside the parallelogram (centers ≥ "
-            "half-reach from each edge).\n"
-            "Center: cylinder centers lie on the parallelogram surface; "
-            "edges may overhang.\n"
+            "Strict: cylinders fully inside the parallelepiped (centers ≥ "
+            "half-reach from every face).\n"
+            "Center: cylinder centers lie inside the box; some surface "
+            "may overhang.\n"
             "Coverage: cylinders may extend up to half-reach beyond each "
-            "edge — overlap-tolerant tiling."
+            "face — overlap-tolerant tiling."
         )
-        self.combo_plg_mode.currentTextChanged.connect(self.recalculate_parallelogram_points)
+        self.combo_plg_mode.currentTextChanged.connect(self.recalculate_parallelepiped_points)
         h_mode.addWidget(self.combo_plg_mode)
         h_mode.addStretch()
         lo.addLayout(h_mode)
@@ -1668,7 +1670,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.spin_plg_density.setRange(0.1, 10.0)
         self.spin_plg_density.setSingleStep(0.1)
         self.spin_plg_density.setDecimals(2)
-        self.spin_plg_density.setValue(self.parallelogram_density)
+        self.spin_plg_density.setValue(self.parallelepiped_density)
         self.spin_plg_density.setToolTip(
             "1.0 = touching no overlap along each edge\n"
             ">1.0 = denser (overlap)\n<1.0 = sparser"
@@ -1678,7 +1680,7 @@ class CylinderApp(QtWidgets.QMainWindow):
         h_dens.addStretch()
         lo.addLayout(h_dens)
 
-        self.chk_show_plgs = QtWidgets.QCheckBox("Show Parallelogram Cylinders")
+        self.chk_show_plgs = QtWidgets.QCheckBox("Show Parallelepiped Cylinders")
         self.chk_show_plgs.setChecked(True)
         self.chk_show_plgs.toggled.connect(self.update_3d_scene)
         lo.addWidget(self.chk_show_plgs)
@@ -1708,7 +1710,7 @@ class CylinderApp(QtWidgets.QMainWindow):
             return None
         return tuple(parts) if len(parts) == 3 else None
 
-    def add_parallelogram_from_text(self):
+    def add_parallelepiped_from_text(self):
         p0 = self._parse_xyz(self.txt_plg_p0.text())
         p1 = self._parse_xyz(self.txt_plg_p1.text())
         p2 = self._parse_xyz(self.txt_plg_p2.text())
@@ -1719,14 +1721,14 @@ class CylinderApp(QtWidgets.QMainWindow):
             return
         if p0 == p1 and p0 == p2:
             self.statusBar().showMessage(
-                "P0, P1, P2 cannot all be identical — that's a single point.", 5000
+                "A, C, A₁ cannot all be identical — that's a single point.", 5000
             )
             return
-        self.parallelograms.append((p0, p1, p2))
+        self.parallelepipeds.append((p0, p1, p2))
         self.active_plg_mask.append(True)
         self.txt_plg_p0.clear(); self.txt_plg_p1.clear(); self.txt_plg_p2.clear()
         self.refresh_plg_list()
-        self.recalculate_parallelogram_points()
+        self.recalculate_parallelepiped_points()
 
     def delete_selected_plgs(self):
         rows = sorted({item.row() for item in self.plg_list_widget.selectedIndexes()},
@@ -1735,35 +1737,35 @@ class CylinderApp(QtWidgets.QMainWindow):
             return
         deleted = []
         for i in rows:
-            deleted.append((self.parallelograms[i], bool(self.active_plg_mask[i])))
-            del self.parallelograms[i]
+            deleted.append((self.parallelepipeds[i], bool(self.active_plg_mask[i])))
+            del self.parallelepipeds[i]
             del self.active_plg_mask[i]
         self._stash_plgs = list(deleted)
         if hasattr(self, 'btn_restore_plgs'):
             self.btn_restore_plgs.setEnabled(True)
         self.refresh_plg_list()
-        self.recalculate_parallelogram_points()
+        self.recalculate_parallelepiped_points()
 
     def restore_last_deleted_plgs(self):
         if not self._stash_plgs:
             return
         for plg, active in reversed(self._stash_plgs):
-            self.parallelograms.append(plg)
+            self.parallelepipeds.append(plg)
             self.active_plg_mask.append(active)
         self._stash_plgs = None
         if hasattr(self, 'btn_restore_plgs'):
             self.btn_restore_plgs.setEnabled(False)
         self.refresh_plg_list()
-        self.recalculate_parallelogram_points()
+        self.recalculate_parallelepiped_points()
 
     def refresh_plg_list(self):
         self.plg_list_widget.blockSignals(True)
         self.plg_list_widget.clear()
-        for i, (p0, p1, p2) in enumerate(self.parallelograms):
-            label = (f"Plg #{i}: "
-                     f"P0({int(p0[0])},{int(p0[1])},{int(p0[2])}) "
-                     f"P1({int(p1[0])},{int(p1[1])},{int(p1[2])}) "
-                     f"P2({int(p2[0])},{int(p2[1])},{int(p2[2])})")
+        for i, (a, c, a1) in enumerate(self.parallelepipeds):
+            label = (f"Box #{i}: "
+                     f"A({int(a[0])},{int(a[1])},{int(a[2])}) "
+                     f"C({int(c[0])},{int(c[1])},{int(c[2])}) "
+                     f"A₁({int(a1[0])},{int(a1[1])},{int(a1[2])})")
             item = QtWidgets.QListWidgetItem(label)
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
             item.setCheckState(QtCore.Qt.Checked if self.active_plg_mask[i] else QtCore.Qt.Unchecked)
@@ -1775,29 +1777,29 @@ class CylinderApp(QtWidgets.QMainWindow):
         self.active_plg_mask[self.plg_list_widget.row(item)] = (
             item.checkState() == QtCore.Qt.Checked
         )
-        self.recalculate_parallelogram_points()
+        self.recalculate_parallelepiped_points()
 
     def _on_plg_density_changed(self, val):
-        self.parallelogram_density = float(val)
-        self.recalculate_parallelogram_points()
+        self.parallelepiped_density = float(val)
+        self.recalculate_parallelepiped_points()
 
     def _on_plg_double_clicked(self, item):
         i = self.plg_list_widget.row(item)
-        if 0 <= i < len(self.parallelograms):
-            p0, p1, p2 = self.parallelograms[i]
-            self.txt_plg_p0.setText(f"{int(p0[0])}, {int(p0[1])}, {int(p0[2])}")
-            self.txt_plg_p1.setText(f"{int(p1[0])}, {int(p1[1])}, {int(p1[2])}")
-            self.txt_plg_p2.setText(f"{int(p2[0])}, {int(p2[1])}, {int(p2[2])}")
+        if 0 <= i < len(self.parallelepipeds):
+            a, c, a1 = self.parallelepipeds[i]
+            self.txt_plg_p0.setText(f"{int(a[0])}, {int(a[1])}, {int(a[2])}")
+            self.txt_plg_p1.setText(f"{int(c[0])}, {int(c[1])}, {int(c[2])}")
+            self.txt_plg_p2.setText(f"{int(a1[0])}, {int(a1[1])}, {int(a1[2])}")
 
-    def recalculate_parallelogram_points(self):
-        active_plgs = [plg for plg, ok in zip(self.parallelograms, self.active_plg_mask) if ok]
+    def recalculate_parallelepiped_points(self):
+        active_plgs = [plg for plg, ok in zip(self.parallelepipeds, self.active_plg_mask) if ok]
         plg_mode = (self.combo_plg_mode.currentText().lower()
                     if hasattr(self, 'combo_plg_mode') else "center")
-        pts, dims_std, dims_exp = solve_parallelogram_coverage(
+        pts, dims_std, dims_exp = solve_parallelepiped_coverage(
             active_plgs, self.current_scan_res, self.cfg,
-            density=self.parallelogram_density, mode=plg_mode,
+            density=self.parallelepiped_density, mode=plg_mode,
         )
-        self.parallelogram_points = pts
+        self.parallelepiped_points = pts
         self.active_plg_cyl_mask = np.ones(len(pts), dtype=bool)
         if not self.rois:
             self.dims_std = dims_std
@@ -2228,14 +2230,14 @@ class CylinderApp(QtWidgets.QMainWindow):
             else:
                 final_points.append(self.line_points)
         if (getattr(self, 'chk_show_plgs', None) and self.chk_show_plgs.isChecked()
-                and len(self.parallelogram_points) > 0):
+                and len(self.parallelepiped_points) > 0):
             mask = self.active_plg_cyl_mask
-            if len(mask) == len(self.parallelogram_points):
+            if len(mask) == len(self.parallelepiped_points):
                 idx_plg = np.where(mask)[0]
                 if len(idx_plg) > 0:
-                    final_points.append(self.parallelogram_points[idx_plg])
+                    final_points.append(self.parallelepiped_points[idx_plg])
             else:
-                final_points.append(self.parallelogram_points)
+                final_points.append(self.parallelepiped_points)
         if self.chk_show_manual.isChecked() and len(self.manual_points) > 0:
             man_active = [p for p, a in zip(self.manual_points, self.active_manual_mask) if a]
             if len(man_active) > 0:
@@ -2361,14 +2363,14 @@ class CylinderApp(QtWidgets.QMainWindow):
                 active_lines, self.current_scan_res, self.cfg, density=self.line_density
             )
             self.active_line_cyl_mask = np.ones(len(self.line_points), dtype=bool)
-            active_plgs = [plg for plg, ok in zip(self.parallelograms, self.active_plg_mask) if ok]
+            active_plgs = [plg for plg, ok in zip(self.parallelepipeds, self.active_plg_mask) if ok]
             plg_mode = (self.combo_plg_mode.currentText().lower()
                         if hasattr(self, 'combo_plg_mode') else "center")
-            self.parallelogram_points, _, _ = solve_parallelogram_coverage(
+            self.parallelepiped_points, _, _ = solve_parallelepiped_coverage(
                 active_plgs, self.current_scan_res, self.cfg,
-                density=self.parallelogram_density, mode=plg_mode,
+                density=self.parallelepiped_density, mode=plg_mode,
             )
-            self.active_plg_cyl_mask = np.ones(len(self.parallelogram_points), dtype=bool)
+            self.active_plg_cyl_mask = np.ones(len(self.parallelepiped_points), dtype=bool)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         new_count = len(self.all_points)
@@ -2520,7 +2522,7 @@ class CylinderApp(QtWidgets.QMainWindow):
             if checked:
                 seq += 1
 
-        n_plg = len(self.parallelogram_points)
+        n_plg = len(self.parallelepiped_points)
         plg_show = (getattr(self, 'chk_show_plgs', None) is None
                     or self.chk_show_plgs.isChecked())
         plg_states = [bool(self.active_plg_cyl_mask[i]) if i < len(self.active_plg_cyl_mask) else True
@@ -2529,11 +2531,11 @@ class CylinderApp(QtWidgets.QMainWindow):
         plg_all = plg_show and bool(n_plg) and all(plg_states)
         self.cyl_list_widget.addItem(
             self._make_section_header(
-                f"Parallelogram Coverage — {plg_active} / {n_plg} active", plg_all, 'plg'
+                f"Parallelepiped — {plg_active} / {n_plg} active", plg_all, 'plg'
             )
         )
         seq = 0
-        for i, p in enumerate(self.parallelogram_points):
+        for i, p in enumerate(self.parallelepiped_points):
             checked = plg_show and plg_states[i]
             tag = f"P{seq}" if checked else "---"
             self.cyl_list_widget.addItem(
@@ -2727,54 +2729,78 @@ class CylinderApp(QtWidgets.QMainWindow):
             act_pts = self.plotter.add_mesh(pts_mesh, color=color, point_size=10, render_points_as_spheres=True, lighting=False, reset_camera=False)
             self.line_actors.append(act_pts)
 
-        # Parallelepiped outline: the 4-corner parallelogram (P0, P1, P3,
-        # P2) extruded by ±H/2 in display Z so the wireframe matches the
-        # actual scan volume the cylinders carve out. 8 corners, 12 edges.
-        h_z_offset = (self.dims_std[1] / 2.0) * self.z_ratio if self.dims_std[1] > 0 else 0.0
-        z_off = np.array([0.0, 0.0, h_z_offset])
-        for (p0, p1, p2), active in zip(self.parallelograms, self.active_plg_mask):
-            a = np.array([p0[0], p0[1], p0[2] * self.z_ratio])
-            b = np.array([p1[0], p1[1], p1[2] * self.z_ratio])
-            c = np.array([p2[0], p2[1], p2[2] * self.z_ratio])
-            d = b + c - a   # 4th in-plane corner: P1 + (P2 - P0)
+        # Parallelepiped outline: 8 corners A + i*u1 + j*u2 + k*u3 with
+        # u1 = (Cx-Ax, 0, 0), u2 = (0, Cy-Ay, 0), u3 = A1 - A. 12 edges
+        # of the box drawn as line segments; the user's input corners
+        # (A, C, A₁) are highlighted with bigger spheres.
+        for (a_in, c_in, a1_in), active in zip(self.parallelepipeds, self.active_plg_mask):
+            # Convert to display space (z multiplied by z_ratio).
+            a = np.array([a_in[0], a_in[1], a_in[2] * self.z_ratio])
+            c = np.array([c_in[0], c_in[1], c_in[2] * self.z_ratio])
+            a1 = np.array([a1_in[0], a1_in[1], a1_in[2] * self.z_ratio])
+            u1 = np.array([c[0] - a[0], 0.0, 0.0])
+            u2 = np.array([0.0, c[1] - a[1], 0.0])
+            u3 = a1 - a
             color = "#ffaa33" if active else "#666666"
-            top = (a + z_off, b + z_off, d + z_off, c + z_off)
-            bot = (a - z_off, b - z_off, d - z_off, c - z_off)
-            edges = (
-                # top face
-                (top[0], top[1]), (top[1], top[2]),
-                (top[2], top[3]), (top[3], top[0]),
-                # bottom face
-                (bot[0], bot[1]), (bot[1], bot[2]),
-                (bot[2], bot[3]), (bot[3], bot[0]),
-                # vertical pillars connecting the two faces
-                (top[0], bot[0]), (top[1], bot[1]),
-                (top[2], bot[2]), (top[3], bot[3]),
-            )
+
+            # Build the 8 corners — corner[i][j][k] = A + i*u1 + j*u2 + k*u3
+            corners = {}
+            for i in (0, 1):
+                for j in (0, 1):
+                    for k in (0, 1):
+                        corners[(i, j, k)] = a + i * u1 + j * u2 + k * u3
+
+            # 12 edges: pairs differing by exactly one bit.
+            edges = []
+            for i in (0, 1):
+                for j in (0, 1):
+                    for k in (0, 1):
+                        if i == 0:
+                            edges.append((corners[(0, j, k)], corners[(1, j, k)]))
+                        if j == 0:
+                            edges.append((corners[(i, 0, k)], corners[(i, 1, k)]))
+                        if k == 0:
+                            edges.append((corners[(i, j, 0)], corners[(i, j, 1)]))
+            # The above generates each edge twice (once from each endpoint
+            # at the lower-bit side); dedupe by hashing endpoint coords.
+            seen = set()
             for u, v in edges:
+                key = (tuple(u.round(6)), tuple(v.round(6)))
+                key = tuple(sorted(key))
+                if key in seen:
+                    continue
+                seen.add(key)
                 edge_mesh = pv.Line(u, v)
                 act = self.plotter.add_mesh(
                     edge_mesh, color=color, line_width=2,
                     lighting=False, reset_camera=False,
                 )
                 self.plg_actors.append(act)
-            # Highlight the user-input corners P0, P1, P2 on the mid plane;
-            # smaller dots on the 8 box corners so they're visible but not
-            # noisy.
-            mid_corners = pv.PolyData(np.vstack([a, b, c]))
-            act_mid = self.plotter.add_mesh(
-                mid_corners, color=color, point_size=12,
+
+            # Big spheres at A, C, A₁ (the user inputs); smaller dots at
+            # the other 5 corners so the box is visually anchored.
+            user_corners = pv.PolyData(np.vstack([a, c, a1]))
+            act_users = self.plotter.add_mesh(
+                user_corners, color=color, point_size=12,
                 render_points_as_spheres=True,
                 lighting=False, reset_camera=False,
             )
-            self.plg_actors.append(act_mid)
-            box_corners = pv.PolyData(np.vstack(top + bot))
-            act_box = self.plotter.add_mesh(
-                box_corners, color=color, point_size=6,
-                render_points_as_spheres=True,
-                lighting=False, reset_camera=False, opacity=0.7,
-            )
-            self.plg_actors.append(act_box)
+            self.plg_actors.append(act_users)
+            other_corners = []
+            user_keys = {tuple(np.round(a, 6)),
+                         tuple(np.round(corners[(1, 1, 0)], 6)),  # C is (1,1,0)
+                         tuple(np.round(a1, 6))}
+            for corner in corners.values():
+                if tuple(np.round(corner, 6)) not in user_keys:
+                    other_corners.append(corner)
+            if other_corners:
+                box_corners = pv.PolyData(np.vstack(other_corners))
+                act_box = self.plotter.add_mesh(
+                    box_corners, color=color, point_size=6,
+                    render_points_as_spheres=True,
+                    lighting=False, reset_camera=False, opacity=0.7,
+                )
+                self.plg_actors.append(act_box)
 
         # Collect all label points and sequential IDs
         label_points = []
@@ -2837,14 +2863,14 @@ class CylinderApp(QtWidgets.QMainWindow):
                     label_ids.append(f"L{seq}")
                     seq += 1
 
-        # Parallelogram cylinders (warm orange) — share dims with std cyls
+        # Parallelepiped cylinders (warm orange) — share dims with std cyls
         if (getattr(self, 'chk_show_plgs', None) and self.chk_show_plgs.isChecked()
-                and len(self.parallelogram_points) > 0):
+                and len(self.parallelepiped_points) > 0):
             mask = self.active_plg_cyl_mask
-            if len(mask) == len(self.parallelogram_points):
-                pp_src = self.parallelogram_points[np.where(mask)[0]]
+            if len(mask) == len(self.parallelepiped_points):
+                pp_src = self.parallelepiped_points[np.where(mask)[0]]
             else:
-                pp_src = self.parallelogram_points
+                pp_src = self.parallelepiped_points
             if len(pp_src) > 0:
                 pp = pp_src.copy()
                 pp[:, 2] *= self.z_ratio
