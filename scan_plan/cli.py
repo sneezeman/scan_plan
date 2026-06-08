@@ -17,7 +17,7 @@ from PyQt5 import QtWidgets
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pyvista")
 
-from scan_plan.io import load_volume, load_config, detect_tiff_dims
+from scan_plan.io import load_volume, load_config, detect_tiff_dims, load_presets
 from scan_plan.solver import calculate_contrast_limits
 from scan_plan.gui import CylinderApp, ConfigDialog
 
@@ -87,6 +87,16 @@ def main():
 
     app = QtWidgets.QApplication(sys.argv)
     cfg = load_config(args.config)
+
+    # Resolve the active beam-energy preset into cfg['optics']. The user
+    # config carries only the preset name; the optics values themselves live
+    # in the (bundled + user) preset store.
+    presets = load_presets()
+    active_preset = cfg.get("active_preset")
+    if active_preset not in presets:
+        active_preset = next(iter(presets))  # deterministic fallback
+        cfg["active_preset"] = active_preset
+    cfg["optics"] = presets[active_preset]
 
     # Startup wizard — replaces manual JSON editing as the primary entry point.
     dlg = ConfigDialog(cfg, args.config)
