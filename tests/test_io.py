@@ -1,7 +1,7 @@
 import json
 import os
 import pytest
-from scan_plan.io import parse_nml, load_config, load_volume
+from scan_plan.io import parse_nml, load_config, load_volume, user_config_dir, load_bundled_presets, load_presets, save_presets
 
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -74,6 +74,61 @@ class TestLoadConfig:
         cfg = load_config(str(cfg_path))
         assert cfg["optics"]["rotation_offset_deg"] == -99.9
         assert cfg["motor_limits"]["su"] == [-1.0, 1.0]
+
+
+class TestUserConfigDir:
+    def test_respects_xdg_config_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        assert user_config_dir() == os.path.join(str(tmp_path), "scan_planner")
+
+    def test_falls_back_to_home_config(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert user_config_dir() == os.path.join(str(tmp_path), ".config", "scan_planner")
+
+
+class TestLoadBundledPresets:
+    def test_contains_both_energies(self):
+        presets = load_bundled_presets()
+        assert set(presets) == {"33keV", "17keV"}
+
+    def test_seed_values(self):
+        presets = load_bundled_presets()
+        assert presets["33keV"]["z12"] == 1282
+        assert presets["33keV"]["sx0_mm"] == 1.292
+        assert presets["17keV"]["z12"] == 1213
+        assert presets["17keV"]["sx0_mm"] == -3.113
+        for name in ("33keV", "17keV"):
+            assert presets[name]["beam_pitch_rad"] == -0.015396
+            assert presets[name]["optics_pixel_size_um"] == 2.952
+            assert presets[name]["rotation_offset_deg"] == -21.5
+
+
+class TestUserPresets:
+    def test_load_returns_bundled_when_no_user_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        presets = load_presets()
+        assert set(presets) == {"33keV", "17keV"}
+        assert presets["33keV"]["z12"] == 1282
+
+    def test_save_then_load_round_trip(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        presets = load_presets()
+        presets["33keV"]["z12"] = 9999
+        save_presets(presets)
+        reloaded = load_presets()
+        assert reloaded["33keV"]["z12"] == 9999
+
+    def test_user_file_deep_merged_over_bundled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        cfg_dir = os.path.join(str(tmp_path), "scan_planner")
+        os.makedirs(cfg_dir, exist_ok=True)
+        with open(os.path.join(cfg_dir, "presets.json"), "w") as f:
+            json.dump({"33keV": {"sx0_mm": 0.0}}, f)
+        presets = load_presets()
+        assert presets["33keV"]["sx0_mm"] == 0.0
+        assert presets["33keV"]["z12"] == 1282
+        assert presets["17keV"]["z12"] == 1213
 
 
 class TestLoadVolume:

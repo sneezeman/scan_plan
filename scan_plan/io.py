@@ -144,6 +144,74 @@ def _deep_merge(defaults, overrides):
     return merged
 
 
+def user_config_dir():
+    """Directory for user-writable scan_planner config (XDG-aware).
+
+    Honours ``$XDG_CONFIG_HOME`` when set, otherwise ``~/.config``. Under
+    Apptainer the host ``$HOME`` is bind-mounted, so this persists across
+    container runs.
+    """
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config"
+    )
+    return os.path.join(base, "scan_planner")
+
+
+def load_bundled_presets():
+    """Load the bundled energy presets shipped in ``scan_plan/presets/``.
+
+    Returns ``{name: optics_dict}``, keyed by the JSON filename stem
+    (e.g. ``"33keV"``).
+    """
+    presets_dir = os.path.join(os.path.dirname(__file__), "presets")
+    presets = {}
+    for fname in os.listdir(presets_dir):
+        if not fname.endswith(".json"):
+            continue
+        name = os.path.splitext(fname)[0]
+        with open(os.path.join(presets_dir, fname), "r") as f:
+            presets[name] = json.load(f)
+    return presets
+
+
+def _user_presets_path():
+    return os.path.join(user_config_dir(), "presets.json")
+
+
+def load_presets():
+    """Energy presets: bundled defaults deep-merged under the user's file.
+
+    The user file (``~/.config/scan_planner/presets.json``) wins per field;
+    any preset or field it omits is inherited from the bundled set, so new
+    bundled presets/fields still appear after an upgrade.
+    """
+    presets = load_bundled_presets()
+    path = _user_presets_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                user = json.load(f)
+        except Exception as e:
+            logger.warning("Could not read user presets: %s", e)
+            user = {}
+        presets = _deep_merge(presets, user)
+    return presets
+
+
+def save_presets(presets):
+    """Write the full preset set to the user's config file.
+
+    Creates the config directory if needed. Errors are logged, never raised.
+    """
+    path = _user_presets_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(presets, f, indent=4)
+    except (OSError, PermissionError) as e:
+        logger.warning("Could not write user presets: %s", e)
+
+
 def load_config(filepath):
     default_config = {
         "volume_path": "/path/to/your/scan/example_norec_.vol",
