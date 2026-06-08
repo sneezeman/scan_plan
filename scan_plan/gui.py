@@ -14,7 +14,7 @@ from pyvistaqt import QtInteractor
 
 from scan_plan.volume_registration import VolumeRegistration
 from scan_plan.nml_exporter import generate_nml
-from scan_plan.io import parse_nml, detect_tiff_dims, update_user_config_keys
+from scan_plan.io import parse_nml, detect_tiff_dims, update_user_config_keys, load_presets, save_presets, load_bundled_presets
 from scan_plan.solver import (
     solve_bbox_grids,
     solve_line_coverage,
@@ -215,6 +215,106 @@ class ConfigDialog(QtWidgets.QDialog):
 
     def get_updates(self):
         return {k: self.config[k] for k in self.EDITABLE_KEYS if k in self.config}
+
+
+class PresetEditorDialog(QtWidgets.QDialog):
+    """Edit beam-energy optics presets; persists to the user presets file."""
+
+    # (label, key, suffix, decimals)
+    FIELDS = (
+        ("Beam pitch", "beam_pitch_rad", " rad", 6),
+        ("Optics pixel size", "optics_pixel_size_um", " µm", 4),
+        ("z12 (z1+z2)", "z12", " mm", 3),
+        ("sx0", "sx0_mm", " mm", 4),
+        ("Rotation offset", "rotation_offset_deg", " deg", 4),
+    )
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Beam-Energy Presets")
+        self.resize(420, 0)
+
+        # Working copy held in memory; written only on Save.
+        self.presets = load_presets()
+        self._current = None  # name of preset currently shown
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        intro = QtWidgets.QLabel(
+            "Edit optics parameters per beam energy. Changes are saved to your "
+            "local presets file and preserved across runs."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #555;")
+        layout.addWidget(intro)
+
+        sel_row = QtWidgets.QHBoxLayout()
+        sel_row.addWidget(QtWidgets.QLabel("Preset:"))
+        self.combo = QtWidgets.QComboBox()
+        self.combo.addItems(sorted(self.presets.keys()))
+        self.combo.currentTextChanged.connect(self._on_preset_changed)
+        sel_row.addWidget(self.combo, 1)
+        layout.addLayout(sel_row)
+
+        form_box = QtWidgets.QGroupBox("Optics")
+        form = QtWidgets.QFormLayout()
+        self.spins = {}
+        for label, key, suffix, decimals in self.FIELDS:
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(-1e6, 1e6)
+            spin.setDecimals(decimals)
+            spin.setSuffix(suffix)
+            # Commit edits to the in-memory dict as the user types.
+            spin.valueChanged.connect(self._on_value_changed)
+            self.spins[key] = spin
+            form.addRow(label + ":", spin)
+        form_box.setLayout(form)
+        layout.addWidget(form_box)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_restore = QtWidgets.QPushButton("Restore bundled")
+        btn_restore.clicked.connect(self._restore_bundled)
+        btn_row.addWidget(btn_restore)
+        btn_row.addStretch(1)
+        btn_save = QtWidgets.QPushButton("Save")
+        btn_save.clicked.connect(self._save)
+        btn_close = QtWidgets.QPushButton("Close")
+        btn_close.clicked.connect(self.reject)
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
+        if self.combo.count():
+            self._on_preset_changed(self.combo.currentText())
+
+    def _on_preset_changed(self, name):
+        if not name:
+            return
+        self._current = name
+        optics = self.presets.get(name, {})
+        for key, spin in self.spins.items():
+            spin.blockSignals(True)
+            spin.setValue(float(optics.get(key, 0.0)))
+            spin.blockSignals(False)
+
+    def _on_value_changed(self, _value):
+        if not self._current:
+            return
+        optics = self.presets.setdefault(self._current, {})
+        for key, spin in self.spins.items():
+            optics[key] = spin.value()
+
+    def _restore_bundled(self):
+        if not self._current:
+            return
+        bundled = load_bundled_presets()
+        if self._current in bundled:
+            self.presets[self._current] = dict(bundled[self._current])
+            self._on_preset_changed(self._current)
+
+    def _save(self):
+        save_presets(self.presets)
+        self.accept()
 
 
 class RegistrationDialog(QtWidgets.QDialog):
