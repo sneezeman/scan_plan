@@ -29,6 +29,7 @@ class ConfigDialog(QtWidgets.QDialog):
         "volume_path", "binning",
         "raw_dims", "raw_dtype", "raw_header_bytes",
         "prescan_pixel_size_xy", "prescan_z_step", "scan_pixel_size",
+        "active_preset",
     )
 
     def __init__(self, config, config_path, parent=None):
@@ -51,6 +52,20 @@ class ConfigDialog(QtWidgets.QDialog):
 
         form_box = QtWidgets.QGroupBox("Session Settings")
         form = QtWidgets.QFormLayout()
+
+        # Beam-energy preset selector + editor launcher.
+        self._presets = load_presets()
+        h_energy = QtWidgets.QHBoxLayout()
+        self.combo_energy = QtWidgets.QComboBox()
+        self.combo_energy.addItems(sorted(self._presets.keys()))
+        active = config.get("active_preset")
+        if active in self._presets:
+            self.combo_energy.setCurrentText(active)
+        btn_edit_presets = QtWidgets.QPushButton("Edit presets…")
+        btn_edit_presets.clicked.connect(self._edit_presets)
+        h_energy.addWidget(self.combo_energy, 1)
+        h_energy.addWidget(btn_edit_presets)
+        form.addRow("Beam energy:", h_energy)
 
         # Volume file picker
         h_vol = QtWidgets.QHBoxLayout()
@@ -132,6 +147,20 @@ class ConfigDialog(QtWidgets.QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
+    def _edit_presets(self):
+        dlg = PresetEditorDialog(self)
+        dlg.exec_()
+        # Refresh the dropdown from the (possibly edited) preset store,
+        # preserving the current selection where still valid.
+        current = self.combo_energy.currentText()
+        self._presets = load_presets()
+        self.combo_energy.blockSignals(True)
+        self.combo_energy.clear()
+        self.combo_energy.addItems(sorted(self._presets.keys()))
+        if current in self._presets:
+            self.combo_energy.setCurrentText(current)
+        self.combo_energy.blockSignals(False)
+
     def _browse_volume(self):
         start_dir = ""
         cur = self.txt_volume.text().strip()
@@ -208,6 +237,7 @@ class ConfigDialog(QtWidgets.QDialog):
             "prescan_pixel_size_xy": self.spin_prescan_xy.value(),
             "prescan_z_step": self.spin_prescan_z.value(),
             "scan_pixel_size": self.spin_scan_px.value(),
+            "active_preset": self.combo_energy.currentText(),
         }
         self.config.update(updates)
         self.accepted_proceed = True
