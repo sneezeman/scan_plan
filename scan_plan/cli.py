@@ -71,6 +71,21 @@ def _save_config_history(config_path):
         logger.warning("Could not save config history copy: %s", e)
 
 
+def _resolve_optics(cfg, presets):
+    """Set ``cfg['optics']`` from the active beam-energy preset.
+
+    Falls back to the first preset by sorted name (matching the wizard combo's
+    order) when ``active_preset`` is missing or unknown, writing the resolved
+    name back into ``cfg['active_preset']``.
+    """
+    active = cfg.get("active_preset")
+    if active not in presets:
+        active = sorted(presets)[0]
+        cfg["active_preset"] = active
+    cfg["optics"] = presets[active]
+    return active
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Advanced GUI for Cylinder Packing Strategy in high-resolution tomography."
@@ -92,11 +107,7 @@ def main():
     # config carries only the preset name; the optics values themselves live
     # in the (bundled + user) preset store.
     presets = load_presets()
-    active_preset = cfg.get("active_preset")
-    if active_preset not in presets:
-        active_preset = next(iter(presets))  # deterministic fallback
-        cfg["active_preset"] = active_preset
-    cfg["optics"] = presets[active_preset]
+    _resolve_optics(cfg, presets)
 
     # Startup wizard — replaces manual JSON editing as the primary entry point.
     dlg = ConfigDialog(cfg, args.config)
@@ -105,6 +116,12 @@ def main():
         cfg.update(updates)
         _update_user_config(args.config, updates)
         _save_config_history(args.config)
+
+    # The wizard may have changed the active preset and/or edited preset values
+    # (the preset editor writes to disk). Re-load and re-resolve so the running
+    # session uses the final selected/edited optics.
+    presets = load_presets()
+    _resolve_optics(cfg, presets)
 
     fp = cfg['volume_path']
     detected = detect_tiff_dims(fp)
