@@ -26,7 +26,7 @@ test = ["pytest"]
 packages = ["scan_plan"]
 
 [tool.setuptools.package-data]
-scan_plan = ["instrument_defaults.json"]
+scan_plan = ["instrument_defaults.json", "presets/*.json"]
 
 [project.scripts]
 scan_planner = "scan_plan.cli:main"
