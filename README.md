@@ -1,4 +1,4 @@
-<img width="300" height="150" alt="Gemini_Generated_Image_upewhiupewhiupew" src="https://github.com/user-attachments/assets/99eb6095-e09c-4395-9b50-4071c6e2aedb" />
+<!-- <img width="300" height="150" alt="Gemini_Generated_Image_upewhiupewhiupew" src="https://github.com/user-attachments/assets/99eb6095-e09c-4395-9b50-4071c6e2aedb" /> -->
 
 **Python 3.10+ | scipy 1.15+ | PyQt5**
 
