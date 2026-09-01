@@ -49,23 +49,26 @@ From: mirror.gcr.io/library/ubuntu:24.04
 
     mkdir sources && cd sources
 
-    # Source is fetched with GitLab's ephemeral per-job token, which is valid
-    # only while the build job runs. NEVER hardcode a deploy token here: this
-    # file lives in a public repository.
-    if [ -z "${CI_JOB_TOKEN}" ]; then
-        echo "ERROR: CI_JOB_TOKEN is not available inside %post." >&2
-        echo "Either export it into the build environment, or switch the URL" >&2
-        echo "below to Apptainer build-arg templating ({{ CI_JOB_TOKEN }}) and" >&2
-        echo "build with:" >&2
-        echo "  apptainer build --build-arg CI_JOB_TOKEN=\"\$CI_JOB_TOKEN\" <img>.sif <def>" >&2
-        exit 1
-    fi
+    # The source is fetched with GitLab's ephemeral CI_JOB_TOKEN, which is only
+    # valid while the build job runs. NEVER inline a long-lived deploy token
+    # here: this file lives in a public repository.
+    #
+    # The token is injected by the ESRF CI template, which turns every name in
+    # APPTAINER_TEMPLATE_VARIABLES into a build arg. Two prerequisites:
+    #   1. .gitlab-ci.yml sets  APPTAINER_TEMPLATE_VARIABLES: "CI_JOB_TOKEN"
+    #   2. artem1706/scan_plan lists apptainer/scan_planner under
+    #      Settings -> CI/CD -> Job token permissions (else the clone 403s)
+    #
+    # NOTE: do not write the build-var braces anywhere else in this file (not
+    # even inside a comment or an echo) - Apptainer parses every occurrence and
+    # fails the build if the variable is not supplied.
 
     # set +x so the credentialed URL never reaches the CI job log.
     set +x
     git clone --depth 1 \
-        "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.esrf.fr/artem1706/scan_plan.git" \
-        scan_plan.git
+        "https://gitlab-ci-token:{{ CI_JOB_TOKEN }}@gitlab.esrf.fr/artem1706/scan_plan.git" \
+        scan_plan.git \
+        || { echo "ERROR: clone failed - check the job-token allowlist" >&2; exit 1; }
 
     pip install --break-system-packages ./scan_plan.git
 

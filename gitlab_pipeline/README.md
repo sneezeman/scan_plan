@@ -61,10 +61,19 @@ Two prerequisites for the job token to work:
 1. In `artem1706/scan_plan` → **Settings → CI/CD → Job token permissions**,
    add the project that runs the build (`Apptainer/scan_planner`) to the
    allowlist. Without this the clone gets 403.
-2. `CI_JOB_TOKEN` must reach the container's `%post`. If the build fails
-   with "CI_JOB_TOKEN is not available inside %post", switch the clone URL
-   to Apptainer build-arg templating (`{{ CI_JOB_TOKEN }}`) and build with
-   `apptainer build --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" ...`.
+2. `.gitlab-ci.yml` must set `APPTAINER_TEMPLATE_VARIABLES: "CI_JOB_TOKEN"`
+   on the build job. The ESRF template writes each listed name into a
+   `--build-arg-file`, which is what substitutes the token into the
+   definition file's build variable.
+
+Because the token arrives as an Apptainer *build variable*, the definition
+file must contain the `{{ … }}` braces **exactly once** — in the clone URL.
+Apptainer parses every occurrence in the file, including ones inside
+comments and `echo` strings, and aborts with
+`build var CI_JOB_TOKEN is not defined` if any of them is unsupplied.
+
+The job token is ephemeral: it expires when the build job finishes, so
+even if it were captured it cannot be reused.
 
 The `%post` section also deletes `/sources` after `pip install`: a git
 checkout keeps the credentialed remote URL in `.git/config`, which would

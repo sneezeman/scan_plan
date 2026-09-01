@@ -7,6 +7,11 @@ variables:
 
 build-apptainer-image:
   extends: .build-apptainer-image
+  variables:
+    # The template writes each listed name into the --build-arg-file, which is
+    # how scan_planner.def receives the ephemeral job token used to clone the
+    # source. Keeps any long-lived credential out of the definition file.
+    APPTAINER_TEMPLATE_VARIABLES: "CI_JOB_TOKEN"
 
 deploy-apptainer-images:
   extends: .deploy-apptainer-images
