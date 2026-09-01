@@ -145,3 +145,7 @@ pytest
 - NML export for standard and expanded bounding boxes
 - Machine coordinate export with motor positions, Fiji-compatible coordinates, and WebKnossos NML bounding boxes
 - Match point file loading — reload previously saved `_match_pairs.txt` files into the registration dialog
+
+## License
+
+Released under the [MIT License](LICENSE) — Copyright (c) 2026 Artem Vorobyev.
