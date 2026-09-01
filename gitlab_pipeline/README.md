@@ -51,7 +51,21 @@ These files live in this directory as a reference. To deploy:
 
 ## Security note
 
-The deploy token is currently inlined in `scan_planner.def`. Prefer
-moving it to a GitLab CI/CD variable (e.g.
-`CI_DEPLOY_USER` / `CI_DEPLOY_PASSWORD`) and referencing it via `${VAR}`
-in the clone URL.
+`scan_planner.def` clones the source with GitLab's ephemeral
+`CI_JOB_TOKEN`, which exists only for the duration of the build job.
+**Never inline a deploy token here** — this repository is public, and a
+previously inlined token had to be revoked after being exposed.
+
+Two prerequisites for the job token to work:
+
+1. In `artem1706/scan_plan` → **Settings → CI/CD → Job token permissions**,
+   add the project that runs the build (`Apptainer/scan_planner`) to the
+   allowlist. Without this the clone gets 403.
+2. `CI_JOB_TOKEN` must reach the container's `%post`. If the build fails
+   with "CI_JOB_TOKEN is not available inside %post", switch the clone URL
+   to Apptainer build-arg templating (`{{ CI_JOB_TOKEN }}`) and build with
+   `apptainer build --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" ...`.
+
+The `%post` section also deletes `/sources` after `pip install`: a git
+checkout keeps the credentialed remote URL in `.git/config`, which would
+otherwise ship inside the image published to CVMFS.

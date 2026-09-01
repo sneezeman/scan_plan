@@ -49,9 +49,30 @@ From: mirror.gcr.io/library/ubuntu:24.04
 
     mkdir sources && cd sources
 
-    git clone https://gitlab+deploy-token-28:gldt-at9GF_6Z5LmqjbMuHh1a@gitlab.esrf.fr/artem1706/scan_plan.git scan_plan.git
+    # Source is fetched with GitLab's ephemeral per-job token, which is valid
+    # only while the build job runs. NEVER hardcode a deploy token here: this
+    # file lives in a public repository.
+    if [ -z "${CI_JOB_TOKEN}" ]; then
+        echo "ERROR: CI_JOB_TOKEN is not available inside %post." >&2
+        echo "Either export it into the build environment, or switch the URL" >&2
+        echo "below to Apptainer build-arg templating ({{ CI_JOB_TOKEN }}) and" >&2
+        echo "build with:" >&2
+        echo "  apptainer build --build-arg CI_JOB_TOKEN=\"\$CI_JOB_TOKEN\" <img>.sif <def>" >&2
+        exit 1
+    fi
+
+    # set +x so the credentialed URL never reaches the CI job log.
+    set +x
+    git clone --depth 1 \
+        "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.esrf.fr/artem1706/scan_plan.git" \
+        scan_plan.git
 
     pip install --break-system-packages ./scan_plan.git
+
+    # Drop the checkout: .git/config stores the credentialed remote URL, which
+    # would otherwise be baked into the image published on CVMFS.
+    cd /
+    rm -rf /sources
 
     apt remove --purge -y git
     apt autoremove -y --purge
