@@ -141,3 +141,23 @@ class TestLoadVolume:
         bad.write_bytes(b"\x00" * 100)
         with pytest.raises(ValueError, match="Unsupported"):
             load_volume(str(bad), (10,10,10), "float32", 1)
+
+    @pytest.mark.parametrize("binning", [1, 2, 4])
+    @pytest.mark.parametrize("z_ratio", [1.0, 1.5])
+    def test_binned_volume_lands_on_unbinned_coordinates(self, tmp_path, binning, z_ratio):
+        # A bright box at known unbinned pixels, block-averaged by `binning`.
+        import numpy as np
+        full = np.zeros((64, 80, 96), np.float32)            # z, y, x
+        full[16:32, 24:40, 40:56] = 1.0
+        truth = np.array([47.5, 31.5, 23.5 * z_ratio])       # x, y, z centroid in world units
+        b = binning
+        nz, ny, nx = (s // b for s in full.shape)
+        binned = full.reshape(nz, b, ny, b, nx, b).mean(axis=(1, 3, 5))
+        path = tmp_path / f"vol_{nx}x{ny}x{nz}.raw"
+        binned.tofile(path)
+
+        grid, _ = load_volume(str(path), (nx, ny, nz), "float32", b, z_ratio=z_ratio)
+
+        vals = np.asarray(grid.point_data["values"], dtype=np.float64)
+        centroid = (np.asarray(grid.points) * vals[:, None]).sum(0) / vals.sum()
+        np.testing.assert_allclose(centroid, truth, atol=1e-6)

@@ -88,7 +88,7 @@ full annotated template.
 | Key                    | Type     | Description                              |
 |------------------------|----------|------------------------------------------|
 | `volume_path`          | string   | Path to .tif/.tiff/.raw/.vol volume      |
-| `binning`              | int      | Prescan binning factor                   |
+| `binning`              | int      | Binning of the volume file (see below)   |
 | `raw_dims`             | [x,y,z]  | Volume dimensions (for .raw/.vol)        |
 | `raw_dtype`            | string   | Data type (e.g. `"float32"`)             |
 | `raw_header_bytes`     | int      | Header offset in raw files               |
@@ -96,6 +96,8 @@ full annotated template.
 | `prescan_z_step`       | number   | Prescan Z step size in nm                |
 | `scan_pixel_size`      | number   | Target scan pixel size in nm             |
 | `rois`                 | array    | Pre-defined ROI bounding boxes           |
+
+`binning` only changes how the volume is displayed. Use it when `volume_path` holds a binned copy of the prescan, for example to load faster. `prescan_pixel_size_xy` and `prescan_z_step` stay at the unbinned values, and so do the coordinates of ROIs, match points and every export. The app assumes the same binning on all three axes.
 
 ### Instrument Defaults
 

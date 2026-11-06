@@ -83,9 +83,12 @@ def load_volume(filepath, dims, dtype_str, binning, z_ratio=1.0, header_bytes=0)
         else:
             display_spacing = (binning, binning, binning * z_ratio)
 
+        # A binned voxel covers `binning` unbinned pixels, so its centre sits
+        # (binning - 1) / 2 pixels past the block start.
+        half_block = (binning - 1) / 2
         grid = pv.ImageData()
         grid.dimensions = data.shape
-        grid.origin = (0, 0, 0)
+        grid.origin = (half_block, half_block, half_block * z_ratio)
         grid.spacing = display_spacing
         grid.point_data["values"] = data.ravel(order="F")
         return grid, data

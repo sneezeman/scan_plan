@@ -84,6 +84,11 @@ class ConfigDialog(QtWidgets.QDialog):
         self.spin_binning = QtWidgets.QSpinBox()
         self.spin_binning.setRange(1, 64)
         self.spin_binning.setValue(int(config.get("binning", 1)))
+        self.spin_binning.setToolTip(
+            "Prescan pixels per voxel of the volume file, on every axis. Set it when the file "
+            "is a binned copy. Pixel sizes, ROIs, match points and exports stay in unbinned "
+            "prescan pixels."
+        )
         form.addRow("Binning:", self.spin_binning)
 
         dims = config.get("raw_dims", [2048, 2048, 2048])
