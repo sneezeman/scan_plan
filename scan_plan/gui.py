@@ -2612,9 +2612,8 @@ class CylinderApp(QtWidgets.QMainWindow):
             self.btn_export_nml.setEnabled(n_active > 0)
         if hasattr(self, 'btn_print_console'):
             self.btn_print_console.setEnabled(n_active > 0)
-        if hasattr(self, 'btn_register'):
-            # Registration always opens; the dialog itself gates Calculate.
-            self.btn_register.setEnabled(n_active > 0)
+        # Registration always opens: checking existing scan positions starts
+        # with no cylinders, and the dialog itself gates Calculate and Save.
 
         # Reset Shift: only when a shift has been applied.
         if hasattr(self, 'btn_reset_shift'):
