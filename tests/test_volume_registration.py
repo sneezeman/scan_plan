@@ -410,3 +410,34 @@ class TestTransformToPrescan:
         su, sv, sz = vreg.refscan_to_motors(vreg.transformToRefscan(planned), final_px)
         landed = vreg.transformToPrescan(vreg.motors_to_refscan(su, sv, sz, final_px))
         np.testing.assert_allclose(landed, planned, atol=1e-6)
+
+
+class TestAnisotropicPrescan:
+    """Prescan z counts slices of prescan_z_step, not of the xy pixel size."""
+
+    @staticmethod
+    def _fit(method):
+        rng = np.random.default_rng(11)
+        vreg = VolumeRegistration(180, prescan_z_step=360)
+        vreg.addReferenceVolume(0, 0, 0, 100)
+        prescan = rng.uniform(100, 900, size=(8, 3))          # x, y in pixels, z in slices
+        refscan = R.from_euler('z', 35, degrees=True).apply(prescan * [1.8, 1.8, 3.6]) + [300, -150, 80]
+        for p, r in zip(prescan, refscan):
+            vreg.addMatchPoint(tuple(p), tuple(r), 0)
+        res = vreg.fitTransformationMatrix(rot_z_only=True, method=method)
+        return vreg, prescan, res
+
+    @pytest.mark.parametrize("method", ["svd", "optimizer"])
+    def test_fit_is_exact(self, method):
+        _, _, res = self._fit(method)
+        assert np.max(res.distances) < 1e-3
+
+    def test_inverse_round_trip(self):
+        vreg, prescan, _ = self._fit("svd")
+        back = vreg.transformToPrescan(vreg.transformToRefscan(prescan))
+        np.testing.assert_allclose(back, prescan, atol=1e-6)
+
+    def test_z_step_defaults_to_xy(self):
+        vreg = VolumeRegistration(180)
+        vreg.addReferenceVolume(0, 0, 0, 100)
+        np.testing.assert_allclose(vreg._scale_prescan(np.ones((1, 3))), [[1.8, 1.8, 1.8]])

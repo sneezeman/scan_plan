@@ -33,10 +33,14 @@ class RegistrationResult(typing.NamedTuple):
 
 class VolumeRegistration():
     
-    def __init__(self, prescan_pixelsize, prescan_pixelunits='nm', pitch=-0.015396, optics=None):
+    def __init__(self, prescan_pixelsize, prescan_pixelunits='nm', pitch=-0.015396, optics=None,
+                 prescan_z_step=None):
         if optics is None:
             optics = {}
         self.__prescan_pixelsize = prescan_pixelsize
+
+        # Prescan z counts slices of prescan_z_step, which can differ from the xy pixel.
+        self.__prescan_z_step = prescan_pixelsize if prescan_z_step is None else prescan_z_step
         self.__prescan_pixelunits = prescan_pixelunits
         self.__ref_volumes = []
         self.__datapoints = []
@@ -269,7 +273,11 @@ class VolumeRegistration():
         return RegistrationResult(distances, transformed, sol, final_angles)
 
     def _scale_prescan(self, prescan_coords):
-        return prescan_coords * (ureg.Quantity(self.__prescan_pixelsize, self.__prescan_pixelunits) / ureg.Quantity(self.__ref_volumes[0].pixel_size, self.__ref_volumes[0].pixel_unit)).to('dimensionless').magnitude
+        """Convert prescan coordinates (x, y in pixels, z in slices) to refscan pixels."""
+        ref = ureg.Quantity(self.__ref_volumes[0].pixel_size, self.__ref_volumes[0].pixel_unit)
+        xy = (ureg.Quantity(self.__prescan_pixelsize, self.__prescan_pixelunits) / ref).to('dimensionless').magnitude
+        z = (ureg.Quantity(self.__prescan_z_step, self.__prescan_pixelunits) / ref).to('dimensionless').magnitude
+        return prescan_coords * np.array([xy, xy, z])
             
     def transformToRefscan(self, prescan_coords):
         prescan_coords_scaled = self._scale_prescan(prescan_coords)

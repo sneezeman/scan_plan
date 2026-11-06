@@ -689,6 +689,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         # Spinboxes guarantee numeric values — no validation try/except.
         try:
             pre_px = self.main_app.cfg["prescan_pixel_size_xy"]
+            pre_z = self.main_app.cfg.get("prescan_z_step", pre_px)
             su = self.in_su.value()
             sv = self.in_sv.value()
             sz = self.in_sz.value()
@@ -704,7 +705,7 @@ class RegistrationDialog(QtWidgets.QDialog):
             # If motor coordinate mode, convert su/sv/sz → refscan pixels
             if self.combo_match_mode.currentIndex() == 1:
                 final_px = self.in_final_px.value()
-                tmp_vreg = VolumeRegistration(pre_px, optics=optics)
+                tmp_vreg = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
                 tmp_vreg.addReferenceVolume(su, sv, sz, self.ref_px)
                 motor_arr = np.array(ref_pts_raw)
                 refscan_arr = tmp_vreg.motors_to_refscan(
@@ -715,8 +716,8 @@ class RegistrationDialog(QtWidgets.QDialog):
             else:
                 self.ref_pts = ref_pts_raw
 
-            self.vreg_svd = VolumeRegistration(pre_px, optics=optics)
-            self.vreg_opt = VolumeRegistration(pre_px, optics=optics)
+            self.vreg_svd = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
+            self.vreg_opt = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
             self.vreg_svd.addReferenceVolume(su, sv, sz, self.ref_px)
             self.vreg_opt.addReferenceVolume(su, sv, sz, self.ref_px)
 
