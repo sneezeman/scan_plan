@@ -278,7 +278,16 @@ class VolumeRegistration():
             centered = centered.copy()
             centered[:, 0] *= -1
         return self.__transformationMatrix.apply(centered) + self._refscan_offset
-    
+
+    def transformToPrescan(self, refscan_coords):
+        """Map refscan pixel coordinates back to prescan pixels (inverse of transformToRefscan)."""
+        centered = self.__transformationMatrix.inv().apply(
+            np.asarray(refscan_coords, dtype=float) - self._refscan_offset
+        )
+        if self.__x_flip:
+            centered[:, 0] *= -1
+        return (centered + self._prescan_offset_scaled) / self._scale_prescan(1.0)
+
     def refscan_to_motors(self, refscan_coords, scan_pixel_size, scan_pixel_unit='nm'):
         ref0vol = self.__ref_volumes[0]
         deltas = (refscan_coords - np.array([ref0vol.width, ref0vol.width, ref0vol.height])/2.) * ureg.Quantity(ref0vol.pixel_size, ref0vol.pixel_unit).to("mm")

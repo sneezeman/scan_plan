@@ -114,6 +114,24 @@ config values take precedence if present.
 
 In the Registration Dialog, the right-table mode can be switched between **Refscan Pixels** (default) and **Motor Coordinates (su/sv/sz)**. Motor coordinate mode is useful when you identify features directly on the physical sample by moving the stage and recording su/sv/sz motor positions, without performing a refscan. The motor coordinates are automatically converted to virtual refscan pixel equivalents before fitting.
 
+## Checking Where Scans Land
+
+The reverse direction works too. Given su/sv/sz positions that already exist (for example, scans already taken), the app shows where they fall in the prescan volume.
+
+1. Open **REGISTER COORDINATES**, enter the refscan 0 position (su, sv, sz) and pixel size, load the match points (e.g. the beamtime's `_match_pairs.txt`), and click **Calculate & Verify Models**.
+2. In the Results tab, click **SHOW MACHINE COORDINATES IN VOLUME** and pick a text file with one row per scan:
+
+   ```
+   #su sv sz pixel_size tomo_n
+   -0.0330 -0.6511 -1.086 100 3000
+   ```
+
+   `su sv sz` are in mm and `pixel_size` is in nm. Further columns such as `tomo_n` are ignored, and lines starting with `#` are skipped. Without a `pixel_size` column (e.g. a file written by **SAVE MACHINE COORDINATES**), every row uses **Final Pixel Size**.
+
+Each row is converted at its own pixel size, because the sz beam-pitch correction depends on it. The positions use the model selected in the Results tab and are added as manual cylinders (yellow, `M` labels). If all rows share one pixel size, the main window's scan resolution and **Final Pixel Size** switch to it, so the cylinders are drawn at the scanned size. Mixed pixel sizes keep the current resolution. Like any manual cylinder, they are included in later exports, so delete them before saving a new plan.
+
+`_match_pairs.txt` does not store the refscan 0 su/sv/sz or pixel size, so re-enter those from the logbook.
+
 ## Output Files
 
 When you click **SAVE MACHINE COORDINATES** in the Registration Dialog, four files are saved (assuming the chosen filename is `tiles_motor_coords.txt`):
@@ -145,6 +163,7 @@ pytest
 - NML export for standard and expanded bounding boxes
 - Machine coordinate export with motor positions, Fiji-compatible coordinates, and WebKnossos NML bounding boxes
 - Match point file loading — reload previously saved `_match_pairs.txt` files into the registration dialog
+- Reverse mapping — show existing su/sv/sz scan positions as cylinders in the prescan volume
 
 ## License
 

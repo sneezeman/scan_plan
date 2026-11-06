@@ -534,6 +534,15 @@ class RegistrationDialog(QtWidgets.QDialog):
         btn_save.clicked.connect(self.save_machine_file)
         layout.addWidget(btn_save)
 
+        btn_show = QtWidgets.QPushButton("SHOW MACHINE COORDINATES IN VOLUME (.txt)")
+        btn_show.setToolTip(
+            "Load su/sv/sz positions (mm) and add them as manual cylinders, "
+            "using the active model and the Final Pixel Size."
+        )
+        btn_show.setStyleSheet("background-color: #337ab7; color: white; font-weight: bold; padding: 10px;")
+        btn_show.clicked.connect(self.load_machine_coords_file)
+        layout.addWidget(btn_show)
+
     def add_row(self):
         r = self.table_pre.rowCount()
         self.table_pre.insertRow(r)
@@ -948,6 +957,82 @@ class RegistrationDialog(QtWidgets.QDialog):
                 QtWidgets.QMessageBox.information(self, "Success", f"Saved 4 files:\n{fileName}\n{fiji_filename}\n{nml_filename}\n{mp_filename}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save: {e}")
+
+    def load_machine_coords_file(self):
+        if self.combo_result_select.currentIndex() == -1 or not self.vreg_svd:
+            QtWidgets.QMessageBox.warning(self, "Error", "Please calculate registration first.")
+            return
+        start_dir = self.main_app.cfg.get('last_machine_save_dir', '')
+        fileName, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Show Machine Coordinates", start_dir, "Text Files (*.txt)")
+        if not fileName:
+            return
+        self.main_app._persist_session_pref('last_machine_save_dir', os.path.dirname(fileName))
+        old_res = self.main_app.current_scan_res
+        try:
+            px = self.show_machine_coords(fileName)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load: {e}")
+            return
+        if len(px) == 0:
+            QtWidgets.QMessageBox.warning(self, "Error", "No su sv sz rows found in the file.")
+            return
+        res = self.main_app.current_scan_res
+        msg = f"Added {len(px)} scan position(s) as manual cylinders, drawn at {res:g} nm."
+        if res != old_res:
+            msg += f"\n\nScan resolution changed from {old_res:g} to {res:g} nm to match the file."
+        elif len(np.unique(px)) > 1:
+            sizes = ", ".join(f"{v:g}" for v in np.unique(px))
+            msg += (f"\n\nThe file mixes pixel sizes ({sizes} nm). Each position is converted "
+                    f"at its own pixel size, but all cylinders are drawn at {res:g} nm.")
+        QtWidgets.QMessageBox.information(self, "Done", msg)
+
+    def show_machine_coords(self, path):
+        """Add the su/sv/sz rows (mm) of *path* to the volume as manual cylinders.
+
+        An optional 4th column gives the row's scan pixel size (nm); without it
+        the Final Pixel Size is used. Further columns are ignored, as are rows
+        starting with '#' or lacking three numbers. When all rows share one
+        pixel size, the main window's scan resolution and the Final Pixel Size
+        are set to it, so cylinders are drawn at the scanned size.
+
+        Returns the per-row pixel sizes of the added cylinders.
+        """
+        default_px = self.in_final_px.value()
+        motors, pixel_sizes = [], []
+        with open(path) as f:
+            for line in f:
+                parts = line.replace('\t', ' ').replace(',', ' ').split()
+                if len(parts) < 3 or parts[0].startswith('#'):
+                    continue
+                try:
+                    motors.append([float(v) for v in parts[:3]])
+                except ValueError:
+                    continue
+                try:
+                    pixel_sizes.append(float(parts[3]))
+                except (IndexError, ValueError):
+                    pixel_sizes.append(default_px)
+        if not motors:
+            return np.empty(0)
+
+        m = np.array(motors)
+        px = np.array(pixel_sizes)
+        vreg = self.vreg_svd if self.combo_result_select.currentIndex() == 0 else self.vreg_opt
+        refscan = vreg.motors_to_refscan(m[:, 0], m[:, 1], m[:, 2], px)
+        prescan = vreg.transformToPrescan(refscan)
+
+        app = self.main_app
+        if len(np.unique(px)) == 1:
+            self.in_final_px.setValue(px[0])
+            app.spin_res.setValue(px[0])
+            app.update_resolution()
+        app.manual_points.extend(prescan)
+        app.active_manual_mask.extend([True] * len(prescan))
+        app.chk_show_manual.setChecked(True)
+        app.refresh_cyl_list()
+        app.update_3d_scene()
+        return px
 
 
 class CylinderApp(QtWidgets.QMainWindow):

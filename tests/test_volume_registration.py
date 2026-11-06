@@ -371,3 +371,42 @@ class TestNearSingularWarning:
         assert "WARNING" not in result.solution.message, (
             f"Unexpected WARNING in message: {result.solution.message}"
         )
+
+
+def _fitted_vreg(method, x_flip=False):
+    """Registration fitted on a rotated, shifted, rescaled point set.
+
+    Prescan pixels are 180 nm and refscan pixels 100 nm, so the inverse
+    must also undo the scaling.
+    """
+    rng = np.random.default_rng(7)
+    vreg = VolumeRegistration(180)
+    vreg.addReferenceVolume(-0.5, 0.1, 1.5, 100)
+    prescan = rng.uniform(200, 1800, size=(8, 3))
+    moved = prescan * 1.8
+    if x_flip:
+        moved[:, 0] *= -1
+    refscan = R.from_euler('xyz', [0, 0, 35], degrees=True).apply(moved) + [300, -150, 80]
+    for p, r in zip(prescan, refscan):
+        vreg.addMatchPoint(tuple(p), tuple(r), 0)
+    vreg.fitTransformationMatrix(rot_z_only=True, method=method)
+    return vreg
+
+
+class TestTransformToPrescan:
+    @pytest.mark.parametrize("method", ["svd", "optimizer"])
+    @pytest.mark.parametrize("x_flip", [False, True])
+    def test_inverts_transformToRefscan(self, method, x_flip):
+        vreg = _fitted_vreg(method, x_flip)
+        prescan = np.random.default_rng(11).uniform(0, 2000, size=(5, 3))
+        recovered = vreg.transformToPrescan(vreg.transformToRefscan(prescan))
+        np.testing.assert_allclose(recovered, prescan, atol=1e-6)
+
+    def test_motor_coords_land_on_planned_points(self):
+        """Planned prescan points -> motors -> back must land where they were planned."""
+        vreg = _fitted_vreg("svd")
+        planned = np.array([[400.0, 900.0, 300.0], [1500.0, 200.0, 1100.0]])
+        final_px = 50.0
+        su, sv, sz = vreg.refscan_to_motors(vreg.transformToRefscan(planned), final_px)
+        landed = vreg.transformToPrescan(vreg.motors_to_refscan(su, sv, sz, final_px))
+        np.testing.assert_allclose(landed, planned, atol=1e-6)
