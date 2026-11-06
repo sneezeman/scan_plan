@@ -8,6 +8,7 @@ from PyQt5 import QtWidgets
 from scipy.spatial.transform import Rotation as R
 
 from scan_plan.gui import RegistrationDialog, error_level
+from scan_plan.volume_registration import VolumeRegistration
 from tests.test_gui_machine_coords import _MainWindow, qapp  # noqa: F401
 
 OK, WARN, BAD = "#cdeccd", "#fab219", "#d03b3b"
@@ -22,7 +23,7 @@ class _MainWithCylinders(_MainWindow):
             self.cfg["motor_limits"] = motor_limits
 
     def get_all_active_points(self):
-        return self._cyl
+        return np.vstack([self._cyl] + [np.atleast_2d(m) for m in self.manual_points])
 
 
 def _dialog(main, z_step=180, nudge=None):
@@ -118,3 +119,61 @@ def test_out_of_range_motor_cell_is_red(qapp):
     dlg = _dialog(main)
     assert _bg(dlg.table_motors.item(0, 3)) == BAD
     assert dlg.table_motors.item(0, 1).background().style() == 0          # in range: no fill
+
+
+def test_one_bad_point_among_three_is_named():
+    mismatch = np.array([[0, 5, 6], [5, 0, 0.2], [6, 0.2, 0]], float)
+    assert "Point 0 disagrees" in RegistrationDialog._matrix_hint(mismatch)
+
+
+def test_failed_recalculation_keeps_the_previous_fit(qapp):
+    dlg = _dialog(_MainWithCylinders([[500, 500, 500]]))
+    before = [it.text() for it in _error_items(dlg)]
+    dlg.in_px.setValue(25.0)
+    dlg.table_pre.setRowCount(2)
+    dlg.table_ref.setRowCount(2)
+    dlg.calculate_registration()
+    assert "at least 3" in dlg.lbl_result.text()
+    assert dlg.ref_px == 100.0
+    dlg.update_results_ui()
+    assert [it.text() for it in _error_items(dlg)] == before
+
+
+def test_motor_mode_vx_ignores_refscan_pixel(qapp):
+    # Right table holds stage positions; the refscan pixel size is only a unit there.
+    main = _MainWithCylinders([[500, 500, 500]])
+    dlg = RegistrationDialog(main)
+    dlg.in_px.setValue(500.0)
+    dlg.in_final_px.setValue(50.0)
+    prescan = np.random.default_rng(3).uniform(200, 1800, size=(6, 3))
+    refscan = R.from_euler("z", 35, degrees=True).apply(prescan * 0.36) + [30, -15, 8]
+    tmp = VolumeRegistration(180)
+    tmp.addReferenceVolume(0.0, 0.0, 0.0, 500.0)
+    motors = np.array(tmp.refscan_to_motors(refscan, 50.0)).T
+    dlg.combo_match_mode.setCurrentIndex(1)
+    dlg.table_pre.setRowCount(0)
+    dlg.table_ref.setRowCount(0)
+    for p, m in zip(prescan, motors):
+        dlg.add_row()
+        row = dlg.table_pre.rowCount() - 1
+        for c in range(3):
+            dlg.table_pre.setItem(row, c, QtWidgets.QTableWidgetItem(repr(float(p[c]))))
+            dlg.table_ref.setItem(row, c, QtWidgets.QTableWidgetItem(repr(float(m[c]))))
+    dlg.calculate_registration()
+    assert "1 vx = 180 nm" in dlg.lbl_err_legend.text()
+
+
+def test_motor_table_follows_final_pixel_size(qapp):
+    cyl = [[400, 900, 300]]
+    dlg = _dialog(_MainWithCylinders(cyl))
+    dlg.in_final_px.setValue(100.0)
+    _, _, sz = dlg.vreg_svd.refscan_to_motors(dlg.vreg_svd.transformToRefscan(np.array(cyl, float)), 100.0)
+    assert float(dlg.table_motors.item(0, 3).text()) == pytest.approx(sz[0], abs=1e-4)
+
+
+def test_motor_table_includes_shown_machine_coords(qapp, tmp_path):
+    dlg = _dialog(_MainWithCylinders([[400, 900, 300]]))
+    path = tmp_path / "scans.txt"
+    path.write_text("#su sv sz\n0.1 -0.5 -1.0\n0.12 -0.45 -1.1\n")
+    dlg.show_machine_coords(str(path))
+    assert dlg.table_motors.rowCount() == 3

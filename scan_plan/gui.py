@@ -386,6 +386,8 @@ class RegistrationDialog(QtWidgets.QDialog):
         self.main_app = main_app
         self.ref_pts = []
         self.ref_px = 0
+        self.vx_nm = None
+        self.vx_basis = ""
         self.vreg_svd = None
         self.vreg_opt = None
         self.res_svd = None
@@ -442,6 +444,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         fl_conf.addRow("sz:", self.in_sz)
         fl_conf.addRow("Refscan Pixel Size:", self.in_px)
         fl_conf.addRow("Final Pixel Size:", self.in_final_px)
+        self.in_final_px.valueChanged.connect(self._refresh_motor_table)
         gb_conf.setLayout(fl_conf)
         layout.addWidget(gb_conf)
 
@@ -716,13 +719,20 @@ class RegistrationDialog(QtWidgets.QDialog):
                 continue
         return prescan, refscan
 
-    def _voxel_nm(self):
-        """Coarsest voxel among prescan XY, prescan Z and refscan, in nm (1 vx)."""
+    def _voxel_nm(self, ref_px, motor_mode):
+        """Return 1 vx in nm, the coarsest voxel in use, and the sizes it was taken from.
+
+        In motor mode the right table holds stage positions, so the refscan pixel
+        size is only a unit and does not count.
+        """
         cfg = self.main_app.cfg
         xy = float(cfg["prescan_pixel_size_xy"])
-        return max(xy, float(cfg.get("prescan_z_step", xy)), float(self.ref_px))
+        sizes = [xy, float(cfg.get("prescan_z_step", xy))]
+        if motor_mode:
+            return max(sizes), "prescan XY and prescan Z"
+        return max(sizes + [float(ref_px)]), "prescan XY, prescan Z and refscan"
 
-    def update_matrix(self, prescan_pts, refscan_pts, vreg):
+    def update_matrix(self, prescan_pts, refscan_pts, vreg, ref_px, vx_nm):
         N = len(prescan_pts)
         self.table_matrix.setRowCount(N)
         self.table_matrix.setColumnCount(N)
@@ -730,10 +740,9 @@ class RegistrationDialog(QtWidgets.QDialog):
         self.table_matrix.setHorizontalHeaderLabels(headers)
         self.table_matrix.setVerticalHeaderLabels(headers)
 
-        um_per_px = self.ref_px / 1000.0
+        um_per_px = ref_px / 1000.0
         d_pre = cdist(*[vreg._scale_prescan(np.array(prescan_pts))] * 2) * um_per_px
         d_ref = cdist(*[np.array(refscan_pts)] * 2) * um_per_px
-        vx_nm = self._voxel_nm()
         mismatch_vx = np.abs(d_pre - d_ref) * 1000.0 / vx_nm
 
         for i in range(N):
@@ -768,10 +777,13 @@ class RegistrationDialog(QtWidgets.QDialog):
         n_bad = int(bad.sum()) // 2
         if n_bad == 0:
             return "All pairwise distances agree within 2 vx."
+        counts = bad.sum(axis=1)
+        if n_bad >= 2 and counts.max() == n_bad:
+            return (f"Point {int(np.argmax(counts))} disagrees with {n_bad} of {n - 1} others "
+                    f"by more than 2 vx. Check it first.")
         if n_bad > n_pairs / 2:
             return (f"{n_bad} of {n_pairs} pairs disagree by more than 2 vx. When most pairs disagree, "
                     f"check the pixel sizes and the Z step before the points.")
-        counts = bad.sum(axis=1)
         if counts.max() < 2:
             return f"{n_bad} pair(s) disagree by more than 2 vx."
         worst = [str(i) for i in np.flatnonzero(counts == counts.max())]
@@ -786,7 +798,9 @@ class RegistrationDialog(QtWidgets.QDialog):
             su = self.in_su.value()
             sv = self.in_sv.value()
             sz = self.in_sz.value()
-            self.ref_px = self.in_px.value()
+            ref_px = self.in_px.value()
+            motor_mode = self.combo_match_mode.currentIndex() == 1
+            vx_nm, vx_basis = self._voxel_nm(ref_px, motor_mode)
 
             pre_pts, ref_pts_raw = self.get_points()
             if len(pre_pts) < 3:
@@ -796,29 +810,29 @@ class RegistrationDialog(QtWidgets.QDialog):
             optics = self.main_app.cfg.get('optics', {})
 
             # If motor coordinate mode, convert su/sv/sz → refscan pixels
-            if self.combo_match_mode.currentIndex() == 1:
+            if motor_mode:
                 final_px = self.in_final_px.value()
                 tmp_vreg = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
-                tmp_vreg.addReferenceVolume(su, sv, sz, self.ref_px)
+                tmp_vreg.addReferenceVolume(su, sv, sz, ref_px)
                 motor_arr = np.array(ref_pts_raw)
                 refscan_arr = tmp_vreg.motors_to_refscan(
                     motor_arr[:, 0], motor_arr[:, 1], motor_arr[:, 2],
                     final_px
                 )
-                self.ref_pts = [tuple(row) for row in refscan_arr]
+                ref_pts = [tuple(row) for row in refscan_arr]
             else:
-                self.ref_pts = ref_pts_raw
+                ref_pts = ref_pts_raw
 
-            self.vreg_svd = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
-            self.vreg_opt = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
-            self.vreg_svd.addReferenceVolume(su, sv, sz, self.ref_px)
-            self.vreg_opt.addReferenceVolume(su, sv, sz, self.ref_px)
+            vreg_svd = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
+            vreg_opt = VolumeRegistration(pre_px, optics=optics, prescan_z_step=pre_z)
+            vreg_svd.addReferenceVolume(su, sv, sz, ref_px)
+            vreg_opt.addReferenceVolume(su, sv, sz, ref_px)
 
-            for p, r in zip(pre_pts, self.ref_pts):
-                self.vreg_svd.addMatchPoint(p, r, 0)
-                self.vreg_opt.addMatchPoint(p, r, 0)
+            for p, r in zip(pre_pts, ref_pts):
+                vreg_svd.addMatchPoint(p, r, 0)
+                vreg_opt.addMatchPoint(p, r, 0)
 
-            self.update_matrix(pre_pts, self.ref_pts, self.vreg_svd)
+            self.update_matrix(pre_pts, ref_pts, vreg_svd, ref_px, vx_nm)
             z_only = self.chk_z_only.isChecked()
 
             progress = QtWidgets.QProgressDialog(
@@ -832,11 +846,17 @@ class RegistrationDialog(QtWidgets.QDialog):
 
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
             try:
-                self.res_svd = self.vreg_svd.fitTransformationMatrix(rot_z_only=z_only, method='svd')
-                self.res_opt = self.vreg_opt.fitTransformationMatrix(rot_z_only=z_only, method='optimizer')
+                res_svd = vreg_svd.fitTransformationMatrix(rot_z_only=z_only, method='svd')
+                res_opt = vreg_opt.fitTransformationMatrix(rot_z_only=z_only, method='optimizer')
             finally:
                 QtWidgets.QApplication.restoreOverrideCursor()
                 progress.close()
+
+            # A failed fit leaves the previous one in place.
+            self.ref_px, self.ref_pts = ref_px, ref_pts
+            self.vx_nm, self.vx_basis = vx_nm, vx_basis
+            self.vreg_svd, self.vreg_opt = vreg_svd, vreg_opt
+            self.res_svd, self.res_opt = res_svd, res_opt
 
             n_pts = len(pre_pts)
             err_svd = np.mean(self.res_svd.distances * (self.ref_px / 1000.0))
@@ -846,7 +866,7 @@ class RegistrationDialog(QtWidgets.QDialog):
 
             self.combo_result_select.blockSignals(True)
             self.combo_result_select.clear()
-            to_vx = 1000.0 / self._voxel_nm()
+            to_vx = 1000.0 / self.vx_nm
             for name, avg, mx in (("SVD (Kabsch)", err_svd, max_svd), ("Optimizer", err_opt, max_opt)):
                 self.combo_result_select.addItem(
                     f"{name} - mean {avg:.2f} \u00b5m ({avg * to_vx:.1f} vx), "
@@ -871,7 +891,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         active_res = self.res_svd if idx == 0 else self.res_opt
 
         err_um = active_res.distances * (self.ref_px / 1000.0)
-        vx_nm = self._voxel_nm()
+        vx_nm = self.vx_nm
         err_vx = err_um * 1000.0 / vx_nm
         n_pts = len(self.ref_pts)
         angles = active_res.rotation_angles
@@ -882,7 +902,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         )
         self.lbl_msg.setText(active_res.solution.message)
         self.lbl_err_legend.setText(
-            f"1 vx = {vx_nm:g} nm, the coarsest voxel among prescan XY, prescan Z and refscan. "
+            f"1 vx = {vx_nm:g} nm, the coarsest voxel among {self.vx_basis}. "
             f"Error colours: {ERR_LEGEND}."
         )
 
@@ -890,7 +910,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         lines = []
         lines.append(f"Method: {active_res.solution.message}")
         lines.append(f"Points: {n_pts}")
-        lines.append(f"1 vx = {vx_nm:g} nm (coarsest voxel among prescan XY, prescan Z and refscan)")
+        lines.append(f"1 vx = {vx_nm:g} nm (coarsest voxel among {self.vx_basis})")
         lines.append(f"Mean error: {np.mean(err_um):.2f} \u00b5m \u00b7 {np.mean(err_vx):.2f} vx")
         lines.append(f"Max error:  {np.max(err_um):.2f} \u00b5m \u00b7 {np.max(err_vx):.2f} vx")
         lines.append(f"Min error:  {np.min(err_um):.2f} \u00b5m \u00b7 {np.min(err_vx):.2f} vx")
@@ -919,6 +939,11 @@ class RegistrationDialog(QtWidgets.QDialog):
 
         # Motor positions of the active cylinders, so overruns show before saving.
         self._update_motor_warnings(active_res)
+
+    def _refresh_motor_table(self, *_):
+        """Recompute cylinder motor positions once a fit exists."""
+        if self.vreg_svd is not None and self.combo_result_select.currentIndex() != -1:
+            self._update_motor_warnings(None)
 
     def _compute_motor_warnings(self, active_vreg):
         """Return (su, sv, sz arrays, list of overrun strings) for the
@@ -1131,6 +1156,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         app.chk_show_manual.setChecked(True)
         app.refresh_cyl_list()
         app.update_3d_scene()
+        self._refresh_motor_table()
         return px
 
 
