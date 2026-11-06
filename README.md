@@ -70,10 +70,10 @@ One can use an ID16A overview tomogram/fasttomo as the prescan volume instead of
    - Or enter values manually in the tables
 3. Set the machine reference parameters (su, sv, sz, pixel sizes)
 4. Click **Calculate & Verify Models** to fit both SVD and Optimizer models
-5. Review per-point errors in the Results tab — both models automatically
-   test for X-flip (mirrored axis) and select the best variant. If match
-   points are nearly collinear, a warning is displayed about poorly
-   constrained rotation.
+5. Review per-point errors in the Results tab (see [Reading the Errors](#reading-the-errors)).
+   Both models automatically test for X-flip (mirrored axis) and select the
+   best variant. If match points are nearly collinear, a warning is displayed
+   about poorly constrained rotation.
 6. Click **SAVE MACHINE COORDINATES** to export all output files
 
 ## Configuration
@@ -115,6 +115,22 @@ config values take precedence if present.
 ## Motor Coordinate Registration
 
 In the Registration Dialog, the right-table mode can be switched between **Refscan Pixels** (default) and **Motor Coordinates (su/sv/sz)**. Motor coordinate mode is useful when you identify features directly on the physical sample by moving the stage and recording su/sv/sz motor positions, without performing a refscan. The motor coordinates are automatically converted to virtual refscan pixel equivalents before fitting.
+
+## Reading the Errors
+
+Errors are given in µm and in **vx**, the coarsest voxel among prescan XY, prescan Z step and refscan pixel size (usually the prescan voxel). A feature can be clicked to about one voxel, so a correct pair should agree within about 1 vx.
+
+| Colour | Error | Meaning |
+|---|---|---|
+| green | up to 1 vx | within clicking precision |
+| amber, `!` | 1 to 2 vx | worth a second look |
+| red, `!!` | above 2 vx | likely a mis-picked pair, or the sample moved or deformed |
+
+- **Consistency Matrix** (Input tab) compares each pairwise distance between the two volumes before any fit. Rigid motion keeps distances, so a mis-picked point shows as a red row and column, and the line under the matrix names it. When most pairs are red, suspect a wrong pixel size or Z step, not the points.
+- **Per-Point Analysis** (Results tab) gives each pair's error after the fit. The fit spreads one bad pair over the others, so use the matrix to find the culprit.
+- **Cylinder Motor Positions** lists su/sv/sz for each active cylinder at **Final Pixel Size**. Red cells exceed the motor travel limits.
+
+Prescan coordinates are unbinned pixels in X and Y and slices in Z. Registration scales Z by `prescan_z_step`, so anisotropic prescans register correctly.
 
 ## Checking Where Scans Land
 

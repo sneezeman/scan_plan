@@ -21,6 +21,34 @@ from scan_plan.solver import (
     solve_parallelepiped_coverage,
 )
 
+# Registration errors are judged in voxels of the coarsest volume (vx). Clicking a
+# feature is accurate to about one voxel, so a pair off by more than two is likely
+# mis-picked. Fills get lighter from bad to ok, so they also read without colour.
+ERR_WARN_VX = 1.0
+ERR_BAD_VX = 2.0
+ERR_STYLE = {
+    "ok":   ("#cdeccd", "#000000", ""),
+    "warn": ("#fab219", "#000000", " !"),
+    "bad":  ("#d03b3b", "#ffffff", " !!"),
+}
+ERR_LEGEND = "green up to 1 vx, amber (!) up to 2 vx, red (!!) above"
+
+
+def error_level(err_vx):
+    """Classify an error in coarse voxels as 'ok', 'warn' or 'bad'."""
+    if err_vx <= ERR_WARN_VX:
+        return "ok"
+    return "warn" if err_vx <= ERR_BAD_VX else "bad"
+
+
+def _styled_item(text, level):
+    """Table item with the fill, ink and marker of an error level."""
+    bg, fg, marker = ERR_STYLE[level]
+    item = QtWidgets.QTableWidgetItem(text + marker)
+    item.setBackground(QtGui.QColor(bg))
+    item.setForeground(QtGui.QColor(fg))
+    return item
+
 
 class ConfigDialog(QtWidgets.QDialog):
     """Startup wizard for editing the scan_plan JSON config without opening the file."""
@@ -402,6 +430,13 @@ class RegistrationDialog(QtWidgets.QDialog):
         self.in_final_px = QtWidgets.QDoubleSpinBox()
         self.in_final_px.setRange(0.01, 100000.0); self.in_final_px.setDecimals(2)
         self.in_final_px.setValue(100.0); self.in_final_px.setSuffix(" nm")
+        for sb in (self.in_su, self.in_sv, self.in_sz):
+            sb.setToolTip("Stage position (mm) at which refscan 0 was acquired.")
+        self.in_px.setToolTip("Pixel size of the refscan whose coordinates go in the right-hand table.")
+        self.in_final_px.setToolTip(
+            "Pixel size of the scans you will acquire. The sz correction for the beam "
+            "pitch depends on it, so the motor positions do too."
+        )
         fl_conf.addRow("su:", self.in_su)
         fl_conf.addRow("sv:", self.in_sv)
         fl_conf.addRow("sz:", self.in_sz)
@@ -424,7 +459,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         h_tables = QtWidgets.QHBoxLayout()
 
         v_pre = QtWidgets.QVBoxLayout()
-        lbl_pre = QtWidgets.QLabel("<b>PRESCAN</b> — pre-beamtime overview volume (pixels)")
+        lbl_pre = QtWidgets.QLabel("<b>PRESCAN</b> — pre-beamtime overview volume (unbinned pixels, Z in slices)")
         lbl_pre.setStyleSheet("background-color: #cce5ff; padding: 4px; border: 2px solid #004085; border-radius: 3px; color: #004085;")
         v_pre.addWidget(lbl_pre)
         self.table_pre = QtWidgets.QTableWidget(0, 3)
@@ -436,7 +471,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         h_tables.addLayout(v_pre)
 
         v_ref = QtWidgets.QVBoxLayout()
-        self.lbl_ref_table = QtWidgets.QLabel("<b>REFSCAN</b> — ID16A reference tomogram (pixels)")
+        self.lbl_ref_table = QtWidgets.QLabel("<b>REFSCAN</b> — ID16A reference tomogram (pixels at Refscan Pixel Size)")
         self.lbl_ref_table.setStyleSheet("background-color: #d4edda; padding: 4px; border: 2px solid #155724; border-radius: 3px; color: #155724;")
         v_ref.addWidget(self.lbl_ref_table)
         self.table_ref = QtWidgets.QTableWidget(0, 3)
@@ -475,11 +510,20 @@ class RegistrationDialog(QtWidgets.QDialog):
         self.table_matrix.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.table_matrix.verticalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         l_mat.addWidget(self.table_matrix)
-        l_mat.addWidget(QtWidgets.QLabel("Upper Right: Prescan Dist | Lower Left: Refscan Dist | Heatmap: Green(0) -> Red(Max)"))
+        self.lbl_matrix_legend = QtWidgets.QLabel(
+            "Pairwise distances in µm, prescan upper right and refscan lower left. "
+            f"Colour shows how much the two volumes disagree: {ERR_LEGEND}."
+        )
+        self.lbl_matrix_legend.setWordWrap(True)
+        l_mat.addWidget(self.lbl_matrix_legend)
+        self.lbl_matrix_hint = QtWidgets.QLabel("")
+        self.lbl_matrix_hint.setWordWrap(True)
+        self.lbl_matrix_hint.setStyleSheet("font-weight: bold;")
+        l_mat.addWidget(self.lbl_matrix_hint)
         gb_mat.setLayout(l_mat)
         layout.addWidget(gb_mat)
 
-        btn_calc = QtWidgets.QPushButton("Calculate & Verify Models")
+        btn_calc = QtWidgets.QPushButton("Calculate && Verify Models")
         btn_calc.setStyleSheet("background-color: #5bc0de; color: white; font-weight: bold; padding: 8px;")
         btn_calc.clicked.connect(self.calculate_registration)
         layout.addWidget(btn_calc)
@@ -506,21 +550,45 @@ class RegistrationDialog(QtWidgets.QDialog):
         self.lbl_cost = QtWidgets.QLabel("[N/A]")
         self.lbl_msg = QtWidgets.QLabel("[N/A]")
         form.addRow("Rotation Angles (Yaw, Pitch, Roll):", self.lbl_rot)
-        form.addRow("Final Cost (Residual):", self.lbl_cost)
+        form.addRow("Mean error:", self.lbl_cost)
         form.addRow("Optimizer Status:", self.lbl_msg)
         gb_res.setLayout(form)
         layout.addWidget(gb_res)
 
         gb_det = QtWidgets.QGroupBox("Per-Point Analysis")
         l_det = QtWidgets.QVBoxLayout()
-        self.table_results = QtWidgets.QTableWidget(0, 5)
-        self.table_results.setHorizontalHeaderLabels(
-            ["ID", "Refscan (Pixels)", "Transformed", "Error (µm)", "Motors (su, sv, sz mm)"]
+        self.table_results = QtWidgets.QTableWidget(0, 4)
+        self.table_results.setHorizontalHeaderLabels(["ID", "Refscan (px)", "Fitted (px)", "Error"])
+        tips = (
+            "Match point number.",
+            "Match point in the refscan, in refscan pixels.",
+            "The prescan match point mapped into the refscan by the model, in refscan pixels.",
+            "Distance between the two, in µm and in vx (voxels of the coarsest volume).",
         )
+        for col, tip in enumerate(tips):
+            self.table_results.horizontalHeaderItem(col).setToolTip(tip)
         self.table_results.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         l_det.addWidget(self.table_results)
+        self.lbl_err_legend = QtWidgets.QLabel(f"Error colours: {ERR_LEGEND}.")
+        self.lbl_err_legend.setWordWrap(True)
+        l_det.addWidget(self.lbl_err_legend)
         gb_det.setLayout(l_det)
-        layout.addWidget(gb_det)
+        self.table_results.verticalHeader().setVisible(False)
+        layout.addWidget(gb_det, 3)
+
+        gb_mot = QtWidgets.QGroupBox("Cylinder Motor Positions")
+        gb_mot.setToolTip(
+            "Stage positions that centre each active cylinder, at Final Pixel Size. "
+            "Red cells (!!) are outside the motor travel limits."
+        )
+        l_mot = QtWidgets.QVBoxLayout()
+        self.table_motors = QtWidgets.QTableWidget(0, 4)
+        self.table_motors.setHorizontalHeaderLabels(["Cylinder", "su (mm)", "sv (mm)", "sz (mm)"])
+        self.table_motors.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.table_motors.verticalHeader().setVisible(False)
+        l_mot.addWidget(self.table_motors)
+        gb_mot.setLayout(l_mot)
+        layout.addWidget(gb_mot, 2)
 
         # Motor-limit summary — populated by update_results_ui. Stays visible
         # next to the SAVE button so out-of-range placement is obvious before
@@ -532,7 +600,7 @@ class RegistrationDialog(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel("Raw Output:"))
         self.txt_raw = QtWidgets.QTextEdit()
         self.txt_raw.setReadOnly(True)
-        layout.addWidget(self.txt_raw)
+        layout.addWidget(self.txt_raw, 1)
 
         btn_save = QtWidgets.QPushButton("SAVE MACHINE COORDINATES (.txt)")
         btn_save.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold; padding: 10px;")
@@ -627,7 +695,7 @@ class RegistrationDialog(QtWidgets.QDialog):
             self.table_ref.setHorizontalHeaderLabels(["su (mm)", "sv (mm)", "sz (mm)"])
             self.table_ref.setStyleSheet("QTableWidget { border: 2px solid #856404; }")
         else:  # Refscan Pixels
-            self.lbl_ref_table.setText("<b>REFSCAN</b> — ID16A reference tomogram (pixels)")
+            self.lbl_ref_table.setText("<b>REFSCAN</b> — ID16A reference tomogram (pixels at Refscan Pixel Size)")
             self.lbl_ref_table.setStyleSheet("background-color: #d4edda; padding: 4px; border: 2px solid #155724; border-radius: 3px; color: #155724;")
             self.table_ref.setHorizontalHeaderLabels(["X", "Y", "Z"])
             self.table_ref.setStyleSheet("QTableWidget { border: 2px solid #155724; }")
@@ -648,6 +716,12 @@ class RegistrationDialog(QtWidgets.QDialog):
                 continue
         return prescan, refscan
 
+    def _voxel_nm(self):
+        """Coarsest voxel among prescan XY, prescan Z and refscan, in nm (1 vx)."""
+        cfg = self.main_app.cfg
+        xy = float(cfg["prescan_pixel_size_xy"])
+        return max(xy, float(cfg.get("prescan_z_step", xy)), float(self.ref_px))
+
     def update_matrix(self, prescan_pts, refscan_pts, vreg):
         N = len(prescan_pts)
         self.table_matrix.setRowCount(N)
@@ -655,35 +729,54 @@ class RegistrationDialog(QtWidgets.QDialog):
         headers = [str(i) for i in range(N)]
         self.table_matrix.setHorizontalHeaderLabels(headers)
         self.table_matrix.setVerticalHeaderLabels(headers)
-        pre_scaled = vreg._scale_prescan(np.array(prescan_pts))
-        ref_np = np.array(refscan_pts)
-        d_pre_mat = cdist(pre_scaled, pre_scaled)
-        d_ref_mat = cdist(ref_np, ref_np)
-        diffs = np.abs(d_pre_mat - d_ref_mat)
-        max_diff = np.max(diffs)
-        if max_diff == 0: max_diff = 1.0
+
+        um_per_px = self.ref_px / 1000.0
+        d_pre = cdist(*[vreg._scale_prescan(np.array(prescan_pts))] * 2) * um_per_px
+        d_ref = cdist(*[np.array(refscan_pts)] * 2) * um_per_px
+        vx_nm = self._voxel_nm()
+        mismatch_vx = np.abs(d_pre - d_ref) * 1000.0 / vx_nm
 
         for i in range(N):
             for j in range(N):
                 if i == j:
                     item = QtWidgets.QTableWidgetItem("-")
-                    item.setBackground(QtGui.QColor(230, 230, 230))
-                    item.setTextAlignment(QtCore.Qt.AlignCenter)
+                    item.setBackground(QtGui.QColor("#e6e6e6"))
                 else:
-                    val = d_pre_mat[i,j] if j > i else d_ref_mat[i,j]
-                    diff = diffs[i,j]
-                    item = QtWidgets.QTableWidgetItem(f"{val:.1f}")
-                    item.setTextAlignment(QtCore.Qt.AlignCenter)
-                    ratio = diff / max_diff
-                    if ratio < 0.5:
-                        local_r = ratio * 2
-                        color = QtGui.QColor(int(local_r*255), 255, 100)
-                    else:
-                        local_r = (ratio - 0.5) * 2
-                        color = QtGui.QColor(255, int((1-local_r)*255), 100)
-                    item.setBackground(color)
-                    item.setToolTip(f"Diff: {diff:.1f}")
+                    val = d_pre[i, j] if j > i else d_ref[i, j]
+                    m = mismatch_vx[i, j]
+                    item = _styled_item(f"{val:.1f}", error_level(m))
+                    item.setToolTip(
+                        f"Points {min(i, j)}-{max(i, j)}: prescan {d_pre[i, j]:.2f} µm, "
+                        f"refscan {d_ref[i, j]:.2f} µm, mismatch {m * vx_nm / 1000:.2f} µm · {m:.1f} vx"
+                    )
+                item.setTextAlignment(QtCore.Qt.AlignCenter)
                 self.table_matrix.setItem(i, j, item)
+
+        self.lbl_matrix_legend.setText(
+            f"Pairwise distances in µm, prescan upper right and refscan lower left. Colour shows "
+            f"how much the two volumes disagree, with 1 vx = {vx_nm:g} nm: {ERR_LEGEND}."
+        )
+        self.lbl_matrix_hint.setText(self._matrix_hint(mismatch_vx))
+
+    @staticmethod
+    def _matrix_hint(mismatch_vx):
+        """One line naming the point(s) most likely mis-picked."""
+        n = len(mismatch_vx)
+        bad = mismatch_vx > ERR_BAD_VX
+        np.fill_diagonal(bad, False)
+        n_pairs = n * (n - 1) // 2
+        n_bad = int(bad.sum()) // 2
+        if n_bad == 0:
+            return "All pairwise distances agree within 2 vx."
+        if n_bad > n_pairs / 2:
+            return (f"{n_bad} of {n_pairs} pairs disagree by more than 2 vx. When most pairs disagree, "
+                    f"check the pixel sizes and the Z step before the points.")
+        counts = bad.sum(axis=1)
+        if counts.max() < 2:
+            return f"{n_bad} pair(s) disagree by more than 2 vx."
+        worst = [str(i) for i in np.flatnonzero(counts == counts.max())]
+        who = f"Point {worst[0]} disagrees" if len(worst) == 1 else f"Points {', '.join(worst)} each disagree"
+        return f"{who} with {counts.max()} of {n - 1} others by more than 2 vx. Check it first."
 
     def calculate_registration(self):
         # Spinboxes guarantee numeric values — no validation try/except.
@@ -753,8 +846,12 @@ class RegistrationDialog(QtWidgets.QDialog):
 
             self.combo_result_select.blockSignals(True)
             self.combo_result_select.clear()
-            self.combo_result_select.addItem(f"SVD (Kabsch) - Avg: {err_svd:.2f} \u00b5m, Max: {max_svd:.2f} \u00b5m ({n_pts} pts)")
-            self.combo_result_select.addItem(f"Optimizer - Avg: {err_opt:.2f} \u00b5m, Max: {max_opt:.2f} \u00b5m ({n_pts} pts)")
+            to_vx = 1000.0 / self._voxel_nm()
+            for name, avg, mx in (("SVD (Kabsch)", err_svd, max_svd), ("Optimizer", err_opt, max_opt)):
+                self.combo_result_select.addItem(
+                    f"{name} - mean {avg:.2f} \u00b5m ({avg * to_vx:.1f} vx), "
+                    f"max {mx:.2f} \u00b5m ({mx * to_vx:.1f} vx), {n_pts} pts"
+                )
 
             # Math (SVD/Kabsch) is the default; user can switch to Optimizer manually.
             self.combo_result_select.setCurrentIndex(0)
@@ -774,22 +871,29 @@ class RegistrationDialog(QtWidgets.QDialog):
         active_res = self.res_svd if idx == 0 else self.res_opt
 
         err_um = active_res.distances * (self.ref_px / 1000.0)
+        vx_nm = self._voxel_nm()
+        err_vx = err_um * 1000.0 / vx_nm
         n_pts = len(self.ref_pts)
         angles = active_res.rotation_angles
         self.lbl_rot.setText(f"Yaw: {angles[0]:.3f}\u00b0,  Pitch: {angles[1]:.3f}\u00b0,  Roll: {angles[2]:.3f}\u00b0")
-        mean_cost = active_res.solution.fun / n_pts if n_pts > 0 else active_res.solution.fun
-        self.lbl_cost.setText(f"{mean_cost:.4f}  (mean per point, {n_pts} points)")
+        self.lbl_cost.setText(
+            f"{np.mean(err_um):.2f} \u00b5m \u00b7 {np.mean(err_vx):.1f} vx   "
+            f"(max {np.max(err_um):.2f} \u00b5m \u00b7 {np.max(err_vx):.1f} vx, {n_pts} points)"
+        )
         self.lbl_msg.setText(active_res.solution.message)
+        self.lbl_err_legend.setText(
+            f"1 vx = {vx_nm:g} nm, the coarsest voxel among prescan XY, prescan Z and refscan. "
+            f"Error colours: {ERR_LEGEND}."
+        )
 
         # Human-readable summary
         lines = []
         lines.append(f"Method: {active_res.solution.message}")
         lines.append(f"Points: {n_pts}")
-        lines.append(f"Total residual: {active_res.solution.fun:.4f} px")
-        lines.append(f"Mean residual:  {mean_cost:.4f} px")
-        lines.append(f"Mean error:     {np.mean(err_um):.2f} \u00b5m")
-        lines.append(f"Max error:      {np.max(err_um):.2f} \u00b5m")
-        lines.append(f"Min error:      {np.min(err_um):.2f} \u00b5m")
+        lines.append(f"1 vx = {vx_nm:g} nm (coarsest voxel among prescan XY, prescan Z and refscan)")
+        lines.append(f"Mean error: {np.mean(err_um):.2f} \u00b5m \u00b7 {np.mean(err_vx):.2f} vx")
+        lines.append(f"Max error:  {np.max(err_um):.2f} \u00b5m \u00b7 {np.max(err_vx):.2f} vx")
+        lines.append(f"Min error:  {np.min(err_um):.2f} \u00b5m \u00b7 {np.min(err_vx):.2f} vx")
         lines.append("")
         lines.append(f"Rotation: Yaw={angles[0]:.4f}\u00b0, Pitch={angles[1]:.4f}\u00b0, Roll={angles[2]:.4f}\u00b0")
         if hasattr(active_res.solution, 'nit'):
@@ -797,28 +901,23 @@ class RegistrationDialog(QtWidgets.QDialog):
         if hasattr(active_res.solution, 'nfev'):
             lines.append(f"Function evaluations: {active_res.solution.nfev}")
         lines.append("")
-        lines.append("Per-point errors (\u00b5m):")
-        for i, e in enumerate(err_um):
-            lines.append(f"  Point {i}: {e:.2f} \u00b5m")
+        lines.append("Per-point errors:")
+        for i, (e, v) in enumerate(zip(err_um, err_vx)):
+            lines.append(f"  Point {i}: {e:.2f} \u00b5m \u00b7 {v:.2f} vx")
         self.txt_raw.setText("\n".join(lines))
 
-        self.table_results.setRowCount(len(self.ref_pts))
-        for i in range(len(self.ref_pts)):
-            self.table_results.setItem(i, 0, QtWidgets.QTableWidgetItem(str(i)))
-            self.table_results.setItem(i, 1, QtWidgets.QTableWidgetItem(str(self.ref_pts[i])))
+        self.table_results.setRowCount(n_pts)
+        for i in range(n_pts):
+            r = self.ref_pts[i]
             trans = active_res.transformed_coords[i]
-            self.table_results.setItem(i, 2, QtWidgets.QTableWidgetItem(f"[{trans[0]:.2f}, {trans[1]:.2f}, {trans[2]:.2f}]"))
+            self.table_results.setItem(i, 0, QtWidgets.QTableWidgetItem(str(i)))
+            self.table_results.setItem(i, 1, QtWidgets.QTableWidgetItem(f"[{r[0]:.1f}, {r[1]:.1f}, {r[2]:.1f}]"))
+            self.table_results.setItem(i, 2, QtWidgets.QTableWidgetItem(f"[{trans[0]:.1f}, {trans[1]:.1f}, {trans[2]:.1f}]"))
+            self.table_results.setItem(
+                i, 3, _styled_item(f"{err_um[i]:.2f} \u00b5m \u00b7 {err_vx[i]:.1f} vx", error_level(err_vx[i]))
+            )
 
-            e_um = err_um[i]
-            item_err = QtWidgets.QTableWidgetItem(f"{e_um:.2f} \u00b5m")
-            if e_um < 5.0: item_err.setBackground(QtGui.QColor(150, 255, 150))
-            elif e_um < 15.0: item_err.setBackground(QtGui.QColor(255, 255, 150))
-            else: item_err.setBackground(QtGui.QColor(255, 150, 150))
-            self.table_results.setItem(i, 3, item_err)
-
-        # Motor coords + limits column. Driven by the active set of cylinder
-        # placements so the user sees overruns at registration time, not at
-        # save time.
+        # Motor positions of the active cylinders, so overruns show before saving.
         self._update_motor_warnings(active_res)
 
     def _compute_motor_warnings(self, active_vreg):
@@ -846,8 +945,9 @@ class RegistrationDialog(QtWidgets.QDialog):
         return su, sv, sz, warnings
 
     def _update_motor_warnings(self, active_res):
-        """Populate the motor column of the results table and the summary
-        label below it. Out-of-range cells are tinted red."""
+        """Fill the cylinder motor table and the limit summary below it.
+        Out-of-range cells are red."""
+        self.table_motors.setRowCount(0)
         idx = self.combo_result_select.currentIndex()
         active_vreg = self.vreg_svd if idx == 0 else self.vreg_opt
         if active_vreg is None:
@@ -867,25 +967,18 @@ class RegistrationDialog(QtWidgets.QDialog):
             self.lbl_motor_warn.setStyleSheet("font-weight: bold; padding: 4px; color: #777;")
             return
 
-        bad_indices = {(i, axis) for i, axis, *_ in warnings}
+        bad = {(i, axis) for i, axis, *_ in warnings}
         n_active = len(su)
-        # Per-row motor column. Match-points table rows correspond to the
-        # match-point set, not the active-cylinder set, so we render motor
-        # info only when the row index lines up.
-        for i in range(self.table_results.rowCount()):
-            if i < n_active:
-                txt = f"({su[i]:+.4f}, {sv[i]:+.4f}, {sz[i]:+.4f}) mm"
-                item = QtWidgets.QTableWidgetItem(txt)
-                row_bad = any((i, ax) in bad_indices for ax in ("su", "sv", "sz"))
-                if row_bad:
-                    item.setBackground(QtGui.QColor(255, 150, 150))
-                    bad_axes = [ax for ax in ("su", "sv", "sz") if (i, ax) in bad_indices]
-                    item.setToolTip("Out of range: " + ", ".join(bad_axes))
+        self.table_motors.setRowCount(n_active)
+        for i in range(n_active):
+            self.table_motors.setItem(i, 0, QtWidgets.QTableWidgetItem(str(i)))
+            for col, (axis, v) in enumerate((("su", su[i]), ("sv", sv[i]), ("sz", sz[i])), start=1):
+                if (i, axis) in bad:
+                    item = _styled_item(f"{v:+.4f}", "bad")
+                    item.setToolTip(f"{axis} is outside the motor travel limits")
                 else:
-                    item.setBackground(QtGui.QColor(220, 255, 220))
-                self.table_results.setItem(i, 4, item)
-            else:
-                self.table_results.setItem(i, 4, QtWidgets.QTableWidgetItem("\u2014"))
+                    item = QtWidgets.QTableWidgetItem(f"{v:+.4f}")
+                self.table_motors.setItem(i, col, item)
 
         if warnings:
             self.lbl_motor_warn.setText(
@@ -928,7 +1021,7 @@ class RegistrationDialog(QtWidgets.QDialog):
                 ]
                 msg = (
                     f"{len(warnings)} cylinder(s) exceed motor travel limits "
-                    f"(also shown in red in the Per-Point Analysis table):\n\n"
+                    f"(also shown in red in the Cylinder Motor Positions table):\n\n"
                     + "\n".join(lines)
                 )
                 QtWidgets.QMessageBox.warning(self, "Motor Limit Warning", msg)
