@@ -20,6 +20,7 @@ scan_plan_config.json
 *_webknossos.txt
 *_match_pairs.txt
 *.nml
+!tests/fixtures/*.nml
 
 # Claude Code
 CLAUDE.md

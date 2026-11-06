@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<things>
+  <meta name="writer" content="ScanPlanner" />
+  <parameters>
+    <userBoundingBox id="1" name="Box_0" isVisible="true" color.r="0.0" color.g="1.0" color.b="1.0" color.a="1.0" topLeftX="100" topLeftY="200" topLeftZ="300" width="500" height="600" depth="700" />
+    <userBoundingBox id="2" name="Box_1" isVisible="true" color.r="0.0" color.g="1.0" color.b="1.0" color.a="1.0" topLeftX="800" topLeftY="900" topLeftZ="1000" width="400" height="300" depth="200" />
+  </parameters>
+</things>
